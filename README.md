@@ -13,8 +13,12 @@ Built directly on two pages from [`pages-lab-ai`](https://github.com/nlade-core/
 - Copy a finished reply to the clipboard
 - Stop generation mid-stream
 - Regenerate the last reply
-- Edit a previous message and resend
+- Edit any previous message (not just the last) and resend — non-destructive: nothing is touched until you confirm, and a clear warning shows how many later messages would be removed if you're editing an earlier one
 - A warning once a conversation gets close to the model's context limit
+- Delete a saved conversation with a two-click confirmation (no accidental, un-undoable deletes)
+- Rename a saved conversation inline
+- Search saved conversations by title *and* full message content
+- A "scroll to bottom" button that appears once you've scrolled up mid-conversation
 
 ## Requirements
 
@@ -41,8 +45,10 @@ End to end with Playwright, stubbing `window.LanguageModel` (this is an ordinary
 - A response containing a literal `<script>` tag and Markdown formatting renders as inert escaped text with the formatting intact — no real script executes.
 - Stop generation cancels the stream immediately via a real `AbortSignal`; no further chunks land even if the underlying call resumes afterward, and the partial reply still gets a Copy button.
 - Regenerating the last reply preserves every earlier exchange (confirmed via the exact `initialPrompts` sent to the recreated session), drops only the pair being regenerated, and resends the real original message — not a placeholder.
-- Editing a message truncates the conversation correctly, repopulates the input, and a resend afterward recreates the session with the true preserved history rather than silently forgetting it.
+- Editing any message (confirmed on the first message of a multi-turn conversation, not just the last) correctly truncates only what comes after it, shows the right discard count first, and a confirmed resend recreates the session with the true preserved history; Cancel/Escape reverts with zero side effects -- no session destroyed, nothing lost.
 - The context-limit warning fires only once real usage crosses 85% of the window, and clears on a new chat.
+- Delete requires two clicks (confirmed the thread survives the first, is removed on the second) and auto-reverts if left unconfirmed; rename updates and persists, Escape cancels without saving; search matches by stored message content, not just title (confirmed against a renamed thread whose title no longer contained the search term but whose messages still did), and shows a distinct message when nothing matches versus when there's nothing saved at all.
+- The scroll-to-bottom button appears only once scrolled away from the bottom, and correctly hides itself when switching conversations even if you'd scrolled up in the previous one.
 
 **Not yet verified:** real Gemini Nano answer quality, real streaming latency, and real `contextWindow`/`contextUsage` figures — all need testing in actual Chrome, not a stub.
 
