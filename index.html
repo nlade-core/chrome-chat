@@ -164,6 +164,7 @@
   .send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
   .stop-btn { background: var(--fg); color: var(--bg); }
   .composer-note { color: var(--muted); font-size: 0.78rem; text-align: center; margin-top: 0.5rem; min-height: 1.2em; }
+  .composer-note.warn { color: var(--warn); font-weight: 600; }
 
   #sidebar-overlay { display: none; }
 
@@ -364,6 +365,7 @@
       renderChat();
       renderThreadList();
       chatNote.textContent = '';
+      chatNote.classList.remove('warn');
       closeSidebarMobile();
     }
 
@@ -384,10 +386,26 @@
           initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages.map((m) => ({ role: m.role, content: m.content }))],
         });
         chatNote.textContent = '';
+        warnIfNearLimit();
       } catch (e) {
         chatNote.textContent = 'Could not restore into the model: ' + e.message;
       }
       chatSendBtn.disabled = false;
+    }
+
+    // Reads the session's own real contextUsage/contextWindow numbers rather
+    // than estimating from message length -- warns before a visitor actually
+    // hits a hard QuotaExceededError, not after.
+    function warnIfNearLimit() {
+      if (!session || session.contextUsage == null || session.contextWindow == null) return;
+      const ratio = session.contextUsage / session.contextWindow;
+      if (ratio > 0.85) {
+        chatNote.textContent = (chatNote.textContent ? chatNote.textContent + ' ' : '') +
+          'This conversation is getting close to its context limit — consider starting a new chat soon.';
+        chatNote.classList.add('warn');
+      } else {
+        chatNote.classList.remove('warn');
+      }
     }
 
     newChatBtn.addEventListener('click', startNewChat);
@@ -445,6 +463,7 @@
       chatSendBtn.style.display = 'flex';
       chatStopBtn.style.display = 'none';
       renderChat(); // re-render once more so the finished (or stopped) reply gets its Copy button
+      warnIfNearLimit();
       persistActiveThread();
     }
 
