@@ -291,6 +291,7 @@
     let session = null;
     let messages = [];
     let activeThreadId = null;
+    let pendingForkMeta = null; // { forkedFrom, forkRoot } to attach the next time persistActiveThread() mints a brand-new thread id
     let editingIndex = null; // index of the user message currently being edited inline, or null
     let renamingId = null; // thread id currently showing an inline rename input, or null
     let pendingDeleteId = null; // thread id armed for delete on a second click, or null
@@ -353,6 +354,7 @@
               warning +
               '<div class="msg-actions">' +
                 '<button class="icon-btn cancel-edit-btn" data-i="' + i + '">Cancel</button>' +
+                '<button class="icon-btn fork-edit-btn" data-i="' + i + '" title="Keep the original conversation untouched; continue this edit as a new one">Fork</button>' +
                 '<button class="icon-btn save-edit-btn" data-i="' + i + '">Save &amp; submit</button>' +
               '</div></div></div>';
           } else {
@@ -424,6 +426,13 @@
         await confirmEdit(i, textarea.value);
         return;
       }
+      const forkEditBtn = e.target.closest('.fork-edit-btn');
+      if (forkEditBtn) {
+        const i = Number(forkEditBtn.dataset.i);
+        const textarea = chatLog.querySelector('.edit-textarea[data-i="' + i + '"]');
+        await forkFrom(i, textarea.value);
+        return;
+      }
       const regenBtn = e.target.closest('.regen-btn');
       if (regenBtn) { regenerateFrom(Number(regenBtn.dataset.i)); return; }
     });
@@ -493,7 +502,20 @@
       const existing = index.find((t) => t.id === activeThreadId);
       const title = existing ? existing.title : titleFrom(messages[0]?.content || 'New chat');
       const updated = index.filter((t) => t.id !== activeThreadId);
-      updated.push({ id: activeThreadId, title, updatedAt: Date.now() });
+      const entry = { id: activeThreadId, title, updatedAt: Date.now() };
+      // Lineage fields, once set, must survive every later save of this same
+      // thread -- persistActiveThread rebuilds the whole index entry from
+      // scratch each time, so without this they'd silently vanish after the
+      // fork's very first message.
+      if (isNewThread && pendingForkMeta) {
+        entry.forkedFrom = pendingForkMeta.forkedFrom;
+        entry.forkRoot = pendingForkMeta.forkRoot;
+        pendingForkMeta = null;
+      } else if (existing && existing.forkedFrom) {
+        entry.forkedFrom = existing.forkedFrom;
+        entry.forkRoot = existing.forkRoot;
+      }
+      updated.push(entry);
       saveIndex(updated);
       saveThreadMessages(activeThreadId, messages);
       renderThreadList();
@@ -750,6 +772,28 @@
       // remains) the next time sendText runs.
       messages = messages.slice(0, i);
       destroySession();
+      stickToBottom = true;
+      await sendText(text);
+    }
+
+    // Same truncation as confirmEdit, but the ORIGINAL thread is left
+    // completely untouched -- forcing activeThreadId back to null makes
+    // persistActiveThread() mint a fresh id the next time this gets saved
+    // (inside sendText's streamReply call), rather than overwriting the
+    // thread being forked from.
+    async function forkFrom(i, newText) {
+      const text = newText.trim();
+      editingIndex = null;
+      if (!text) { renderChat(); return; }
+
+      const originalThreadId = activeThreadId;
+      const originalEntry = loadIndex().find((t) => t.id === originalThreadId);
+      const forkRoot = (originalEntry && originalEntry.forkRoot) || originalThreadId;
+
+      messages = messages.slice(0, i);
+      destroySession();
+      activeThreadId = null;
+      pendingForkMeta = { forkedFrom: originalThreadId, forkRoot };
       stickToBottom = true;
       await sendText(text);
     }
