@@ -19,6 +19,7 @@ Built directly on two pages from [`pages-lab-ai`](https://github.com/nlade-core/
 - Rename a saved conversation inline
 - Search saved conversations by title *and* full message content
 - A "scroll to bottom" button that appears once you've scrolled up mid-conversation
+- **Conversation forking**: editing a message offers "Fork" alongside "Save & submit" — instead of overwriting, it creates a brand-new conversation with everything before the edit preserved, leaving the original completely untouched. Forked conversations collapse into a single sidebar entry (the original's title + a count badge); expanding it shows every version — original and forks alike — as neutral peers with a relation tag and last-updated time, no version auto-selected as "main". Forking a fork still traces back to the true original, however deep the chain.
 
 ## Requirements
 
@@ -32,6 +33,7 @@ Single static `index.html` — zero build step, zero framework, zero backend. Ev
 - **Storage:** `localStorage`, namespaced `chrome-chat:`. An index key (`chrome-chat:index`) holds `[{id, title, updatedAt}]`; each conversation's messages live under their own `chrome-chat:thread:<id>` key.
 - **Restoring a saved conversation:** its messages render immediately (free, just redrawn from storage) — the model itself is only re-primed with that history via `initialPrompts` at the moment you open it, never speculatively for conversations you haven't clicked on.
 - **Markdown:** rendered via `marked.js`, with model output escaped *before* parsing — literal HTML/`<script>` in a response renders as inert text, never executes.
+- **Fork lineage:** two extra fields on a thread's index entry — `forkedFrom` (immediate parent id) and `forkRoot` (the ultimate original ancestor, inherited transitively). A fork of a fork still resolves back to the true root in one lookup, without walking the chain.
 
 ## Verified
 
@@ -49,6 +51,7 @@ End to end with Playwright, stubbing `window.LanguageModel` (this is an ordinary
 - The context-limit warning fires only once real usage crosses 85% of the window, and clears on a new chat.
 - Delete requires two clicks (confirmed the thread survives the first, is removed on the second) and auto-reverts if left unconfirmed; rename updates and persists, Escape cancels without saving; search matches by stored message content, not just title (confirmed against a renamed thread whose title no longer contained the search term but whose messages still did), and shows a distinct message when nothing matches versus when there's nothing saved at all.
 - The scroll-to-bottom button appears only once scrolled away from the bottom, and correctly hides itself when switching conversations even if you'd scrolled up in the previous one.
+- Forking leaves the original thread's saved messages and index entry byte-for-byte unchanged; a fork's `forkedFrom`/`forkRoot` are correct, and forking a fork still resolves `forkRoot` back to the true original two levels back, not the intermediate fork. A 3-member family (original + fork + fork-of-a-fork) collapses to one sidebar row with the correct count badge; expanding shows exactly one "Original" and the rest tagged "Fork"; the row highlights as active whenever any member is the open conversation. Renaming a family's root updates the sidebar label live. Deleting a thread with dependent forks warns with the real count first, and — once confirmed — the surviving forks correctly render as a plain standalone row rather than a broken family display.
 
 **Not yet verified:** real Gemini Nano answer quality, real streaming latency, and real `contextWindow`/`contextUsage` figures — all need testing in actual Chrome, not a stub.
 
