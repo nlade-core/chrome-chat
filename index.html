@@ -113,6 +113,7 @@
   .family-children { margin-left: 1.1rem; border-left: 1px solid #3a3a3a; padding-left: 0.4rem; }
   .family-child-wrap { margin-bottom: 0.2rem; }
   .family-child-meta { color: #8a8a8a; font-size: 0.7rem; padding: 0 0.6rem 0.3rem; }
+  .delete-fork-warning { color: #ff7b72; font-size: 0.68rem; padding: 0 0.6rem 0.4rem; }
   .sidebar-footer { flex-shrink: 0; padding: 0.75rem; border-top: 1px solid #2f2f2f; font-size: 0.75rem; color: #9b9b9b; }
   .sidebar-footer a { color: #9b9b9b; }
   .status-pill { font-weight: 600; padding: 0.1rem 0.4rem; border-radius: 4px; }
@@ -479,6 +480,10 @@
       return loadThreadMessages(t.id).some((m) => m.content.toLowerCase().includes(q));
     }
 
+    function countForksOf(id) {
+      return loadIndex().filter((t) => t.forkedFrom === id).length;
+    }
+
     function formatRelativeTime(ts) {
       const mins = Math.round((Date.now() - ts) / 60000);
       if (mins < 1) return 'just now';
@@ -496,11 +501,24 @@
         ? '<input class="thread-rename-input" data-id="' + t.id + '" value="' + escapeHtml(t.title) + '">'
         : '<span class="thread-title">' + escapeHtml(t.title) + '</span>';
       const deleteLabel = t.id === pendingDeleteId ? 'Sure?' : '×';
-      return '<div class="thread-item ' + (indented ? 'family-child ' : '') + (t.id === activeThreadId ? 'active' : '') + '" data-id="' + t.id + '">' +
+      const row = '<div class="thread-item ' + (indented ? 'family-child ' : '') + (t.id === activeThreadId ? 'active' : '') + '" data-id="' + t.id + '">' +
         titleHtml +
         (t.id === renamingId ? '' : '<button class="thread-rename" data-id="' + t.id + '" title="Rename">✎</button>') +
         '<button class="thread-delete ' + (t.id === pendingDeleteId ? 'confirming' : '') + '" data-id="' + t.id + '" title="Delete">' + deleteLabel + '</button>' +
       '</div>';
+      // Disclosed, not blocked -- deleting a thread other conversations were
+      // forked from is allowed, but the confirm state says so plainly first.
+      // Orphaned children keep their forkedFrom pointing at a now-missing
+      // id; renderThreadList()'s family-label fallback already handles that
+      // gracefully rather than crashing.
+      if (t.id === pendingDeleteId) {
+        const forkCount = countForksOf(t.id);
+        if (forkCount > 0) {
+          return row + '<div class="delete-fork-warning">Has ' + forkCount + ' fork' + (forkCount === 1 ? '' : 's') +
+            ' -- ' + (forkCount === 1 ? 'it' : 'they') + ' will be kept, shown as forked from a deleted conversation.</div>';
+        }
+      }
+      return row;
     }
 
     function renderThreadList() {
