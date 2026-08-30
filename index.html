@@ -131,6 +131,7 @@
     padding: 0.6rem 1rem; resize: none; overflow-y: auto; line-height: 1.4;
   }
   .edit-textarea:focus { outline: none; }
+  .edit-warning { color: var(--warn); font-size: 0.78rem; margin-top: 0.4rem; text-align: right; }
   .save-edit-btn { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
   .md > *:first-child { margin-top: 0; }
   .md > *:last-child { margin-bottom: 0; }
@@ -310,19 +311,29 @@
         row.className = 'message-row ' + m.role;
         if (m.role === 'user') {
           if (i === editingIndex) {
+            // Editing an earlier message inherently discards everything
+            // after it (sequential conversation context can't fork), so
+            // when this isn't the last message, say exactly how much would
+            // go before it's actually committed -- no silent surprise.
+            const discardCount = lastIndex - i;
+            const warning = discardCount > 0
+              ? '<div class="edit-warning">Saving will also remove the ' + discardCount + ' message' + (discardCount === 1 ? '' : 's') + ' after this one.</div>'
+              : '';
             row.innerHTML = '<div class="content"><div class="user-wrap edit-mode">' +
               '<textarea class="edit-textarea" data-i="' + i + '">' + escapeHtml(m.content) + '</textarea>' +
+              warning +
               '<div class="msg-actions">' +
                 '<button class="icon-btn cancel-edit-btn" data-i="' + i + '">Cancel</button>' +
                 '<button class="icon-btn save-edit-btn" data-i="' + i + '">Save &amp; submit</button>' +
               '</div></div></div>';
           } else {
-            // Only offered on the last exchange, and only when nothing else
-            // is already being edited -- editing an earlier message would
-            // discard every later turn anyway (an inherent consequence of
-            // sequential conversation context, not just a UI safety choice),
-            // and one edit at a time keeps the interaction simple.
-            const editBtn = (!streaming && editingIndex === null && (i === lastIndex || i === lastIndex - 1))
+            // Any user message can be edited -- only gated on nothing else
+            // already being edited and no generation in progress. Entering
+            // edit mode is free and fully reversible (see startEdit/
+            // cancelEdit), so there's no need to restrict *which* message
+            // can be opened; the discard warning above is what protects
+            // against a surprise when actually confirming one.
+            const editBtn = (!streaming && editingIndex === null)
               ? '<div class="msg-actions"><button class="icon-btn edit-btn" data-i="' + i + '">Edit</button></div>' : '';
             row.innerHTML = '<div class="content"><div class="user-wrap"><div class="bubble">' + renderMarkdown(m.content) + '</div>' + editBtn + '</div></div>';
           }
