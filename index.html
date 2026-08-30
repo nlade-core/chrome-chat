@@ -117,10 +117,12 @@
   .message-row .content { max-width: 48rem; margin: 0 auto; }
   .message-row.assistant .content { text-align: left; }
   .message-row.user .content { display: flex; justify-content: flex-end; }
+  .message-row.user .user-wrap { display: flex; flex-direction: column; align-items: flex-end; max-width: 70%; }
   .message-row.user .bubble {
-    max-width: 70%; background: var(--user-bubble-bg);
+    background: var(--user-bubble-bg);
     border-radius: 1.25rem; padding: 0.6rem 1rem;
   }
+  .message-row.user .msg-actions { margin-top: 0.3rem; margin-right: 0.2rem; }
   .md > *:first-child { margin-top: 0; }
   .md > *:last-child { margin-bottom: 0; }
   .md p, .md ul, .md ol { margin: 0.6rem 0; }
@@ -280,22 +282,36 @@
 
     let stickToBottom = true;
 
-    // Copy action only makes sense on a finished assistant reply -- the last
-    // message while a stream is still in flight is still growing, so it's
-    // excluded to avoid copying a half-written response.
+    // Copy/Regenerate only make sense on a finished assistant reply -- the
+    // last message while a stream is still in flight is still growing, so
+    // it's excluded. Edit and Regenerate are further restricted to only the
+    // *last* exchange, since editing/regenerating anything earlier would
+    // need to discard everything after it anyway (handled by the truncation
+    // in editMessage/regenerateFrom) -- showing the action only where it's
+    // actually reachable avoids a button that looks available but silently
+    // deletes a bunch of later conversation when clicked.
     function renderChat() {
       const hasMessages = messages.length > 0;
       emptyStateEl.style.display = hasMessages ? 'none' : 'flex';
       chatLog.querySelectorAll('.message-row').forEach((el) => el.remove());
+      const lastIndex = messages.length - 1;
       messages.forEach((m, i) => {
         const row = document.createElement('div');
         row.className = 'message-row ' + m.role;
         if (m.role === 'user') {
-          row.innerHTML = '<div class="content"><div class="bubble">' + renderMarkdown(m.content) + '</div></div>';
+          const editBtn = (!streaming && (i === lastIndex || i === lastIndex - 1))
+            ? '<div class="msg-actions"><button class="icon-btn edit-btn" data-i="' + i + '">Edit</button></div>' : '';
+          row.innerHTML = '<div class="content"><div class="user-wrap"><div class="bubble">' + renderMarkdown(m.content) + '</div>' + editBtn + '</div></div>';
         } else {
-          const isLastAndStreaming = streaming && i === messages.length - 1;
-          const actions = isLastAndStreaming ? '' :
-            '<div class="msg-actions"><button class="icon-btn copy-btn" data-i="' + i + '">Copy</button></div>';
+          const isLastAndStreaming = streaming && i === lastIndex;
+          let actions = '';
+          if (!isLastAndStreaming) {
+            actions = '<div class="msg-actions"><button class="icon-btn copy-btn" data-i="' + i + '">Copy</button>';
+            if (i === lastIndex && !streaming) {
+              actions += '<button class="icon-btn regen-btn" data-i="' + i + '">Regenerate</button>';
+            }
+            actions += '</div>';
+          }
           row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + actions + '</div>';
         }
         chatLog.appendChild(row);
@@ -306,13 +322,19 @@
       stickToBottom = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 40;
     });
     chatLog.addEventListener('click', async (e) => {
-      const btn = e.target.closest('.copy-btn');
-      if (!btn) return;
-      const i = Number(btn.dataset.i);
-      await navigator.clipboard.writeText(messages[i].content);
-      const original = btn.textContent;
-      btn.textContent = 'Copied';
-      setTimeout(() => { btn.textContent = original; }, 1500);
+      const copyBtn = e.target.closest('.copy-btn');
+      if (copyBtn) {
+        const i = Number(copyBtn.dataset.i);
+        await navigator.clipboard.writeText(messages[i].content);
+        const original = copyBtn.textContent;
+        copyBtn.textContent = 'Copied';
+        setTimeout(() => { copyBtn.textContent = original; }, 1500);
+        return;
+      }
+      const editBtn = e.target.closest('.edit-btn');
+      if (editBtn) { editMessage(Number(editBtn.dataset.i)); return; }
+      const regenBtn = e.target.closest('.regen-btn');
+      if (regenBtn) { regenerateFrom(Number(regenBtn.dataset.i)); return; }
     });
 
     function renderThreadList() {
@@ -471,12 +493,12 @@
       if (abortController) abortController.abort();
     });
 
-    async function sendChat() {
-      const text = chatInput.value.trim();
+    // Shared by a normal send, edit-and-resend, and regenerate. Assumes
+    // `messages` already holds whatever prefix should survive (empty for a
+    // brand-new chat, or a truncated prior history for edit/regenerate).
+    async function sendText(text) {
       if (!text || !promptOk) return;
       chatSendBtn.disabled = true;
-      chatInput.value = '';
-      autoResize();
       messages.push({ role: 'user', content: text });
       stickToBottom = true;
       renderChat();
@@ -485,8 +507,13 @@
       try {
         if (!session) {
           chatNote.textContent = 'Starting session (may download the model on first use)…';
+          // messages already includes the turn just pushed above -- seed
+          // initialPrompts with everything BEFORE it. For a genuinely new
+          // chat that's empty; after an edit/regenerate truncation it's the
+          // real preserved history, so a freshly (re)created session doesn't
+          // silently forget context that should still be there.
           session = await LanguageModel.create({
-            initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }],
+            initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages.slice(0, -1).map((m) => ({ role: m.role, content: m.content }))],
             monitor(m) {
               m.addEventListener('downloadprogress', (e) => {
                 chatNote.textContent = 'Downloading model… ' + Math.round(e.loaded * 100) + '%';
@@ -499,6 +526,46 @@
         chatNote.textContent = 'Error: ' + e.message;
       }
       chatSendBtn.disabled = false;
+    }
+
+    async function sendChat() {
+      const text = chatInput.value.trim();
+      if (!text || !promptOk) return;
+      chatInput.value = '';
+      autoResize();
+      await sendText(text);
+    }
+
+    function editMessage(userIndex) {
+      if (streaming) return;
+      chatInput.value = messages[userIndex].content;
+      autoResize();
+      chatInput.focus();
+      // Truncate back to before this message -- a live session's internal
+      // context can't be rewound, so it's destroyed here and correctly
+      // recreated (with whatever prefix remains) the next time sendText runs.
+      messages = messages.slice(0, userIndex);
+      destroySession();
+      stickToBottom = true;
+      renderChat();
+      chatNote.textContent = 'Edit your message and send — the conversation after this point has been cleared.';
+      chatNote.classList.remove('warn');
+    }
+
+    async function regenerateFrom(assistantIndex) {
+      if (streaming || !session) return;
+      const lastUserIndex = assistantIndex - 1;
+      if (lastUserIndex < 0 || messages[lastUserIndex].role !== 'user') return;
+      const textToResend = messages[lastUserIndex].content;
+      // Same truncate-and-destroy path as editMessage, then immediately
+      // resend the REAL prior text (not a filler string -- a real bug caught
+      // in this exact spot during planning) so the visible transcript and
+      // the model's actual context never diverge.
+      messages = messages.slice(0, lastUserIndex);
+      destroySession();
+      stickToBottom = true;
+      renderChat();
+      await sendText(textToResend);
     }
 
     chatSendBtn.addEventListener('click', sendChat);
