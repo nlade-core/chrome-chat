@@ -162,6 +162,7 @@
     display: flex; align-items: center; justify-content: center; font-size: 0.9rem;
   }
   .send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .stop-btn { background: var(--fg); color: var(--bg); }
   .composer-note { color: var(--muted); font-size: 0.78rem; text-align: center; margin-top: 0.5rem; min-height: 1.2em; }
 
   #sidebar-overlay { display: none; }
@@ -208,6 +209,7 @@
           <div class="composer-box">
             <textarea id="chat-input" placeholder="Message chrome-chat…" rows="1"></textarea>
             <button class="send-btn" id="chat-send-btn" disabled aria-label="Send">➤</button>
+            <button class="send-btn stop-btn" id="chat-stop-btn" style="display:none;" aria-label="Stop generating">■</button>
           </div>
           <div class="composer-note" id="chat-note"></div>
         </div>
@@ -225,6 +227,7 @@
     const chatLog = document.getElementById('chat-log');
     const chatInput = document.getElementById('chat-input');
     const chatSendBtn = document.getElementById('chat-send-btn');
+    const chatStopBtn = document.getElementById('chat-stop-btn');
     const chatNote = document.getElementById('chat-note');
     const hamburgerBtn = document.getElementById('hamburger-btn');
     const sidebar = document.getElementById('sidebar');
@@ -413,6 +416,42 @@
     }
     chatInput.addEventListener('input', autoResize);
 
+    let abortController = null;
+
+    // Shared by a fresh send and (later) regenerate -- takes the exact turn
+    // content to send, assumes the user-side message is already in
+    // `messages` and rendered. Owns the streaming loop, the Stop button
+    // wiring, and persisting the thread once the reply is done.
+    async function streamReply(turnInput) {
+      const assistantMsg = { role: 'assistant', content: '' };
+      messages.push(assistantMsg);
+      streaming = true;
+      abortController = new AbortController();
+      chatSendBtn.style.display = 'none';
+      chatStopBtn.style.display = 'flex';
+      renderChat();
+      try {
+        const stream = session.promptStreaming(turnInput, { signal: abortController.signal });
+        for await (const chunk of stream) {
+          assistantMsg.content += chunk;
+          renderChat();
+        }
+        chatNote.textContent = '';
+      } catch (e) {
+        chatNote.textContent = e.name === 'AbortError' ? 'Stopped.' : 'Error: ' + e.message;
+      }
+      streaming = false;
+      abortController = null;
+      chatSendBtn.style.display = 'flex';
+      chatStopBtn.style.display = 'none';
+      renderChat(); // re-render once more so the finished (or stopped) reply gets its Copy button
+      persistActiveThread();
+    }
+
+    chatStopBtn.addEventListener('click', () => {
+      if (abortController) abortController.abort();
+    });
+
     async function sendChat() {
       const text = chatInput.value.trim();
       if (!text || !promptOk) return;
@@ -436,21 +475,8 @@
             },
           });
         }
-        const assistantMsg = { role: 'assistant', content: '' };
-        messages.push(assistantMsg);
-        streaming = true;
-        renderChat();
-        const stream = session.promptStreaming([{ role: 'user', content: [{ type: 'text', value: text }] }]);
-        for await (const chunk of stream) {
-          assistantMsg.content += chunk;
-          renderChat();
-        }
-        streaming = false;
-        renderChat(); // re-render once more so the finished reply gets its Copy button
-        chatNote.textContent = '';
-        persistActiveThread();
+        await streamReply([{ role: 'user', content: [{ type: 'text', value: text }] }]);
       } catch (e) {
-        streaming = false;
         chatNote.textContent = 'Error: ' + e.message;
       }
       chatSendBtn.disabled = false;
