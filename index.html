@@ -129,6 +129,17 @@
   .md pre { background: color-mix(in srgb, var(--fg) 8%, transparent); border-radius: 6px; padding: 0.75rem; overflow-x: auto; margin: 0.6rem 0; }
   .md pre code { background: none; padding: 0; }
 
+  .msg-actions { margin-top: 0.5rem; display: flex; gap: 0.4rem; }
+  .msg-actions .icon-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 6px;
+    padding: 0.2rem 0.55rem;
+    font-size: 0.75rem;
+  }
+  .msg-actions .icon-btn:hover { color: var(--fg); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+
   #composer { flex-shrink: 0; }
   .composer-shell { max-width: 48rem; margin: 0 auto; padding: 0 1rem 1rem; }
   .composer-box {
@@ -235,6 +246,7 @@
     }
 
     let promptOk = false;
+    let streaming = false;
     let session = null;
     let messages = [];
     let activeThreadId = null;
@@ -264,23 +276,39 @@
 
     let stickToBottom = true;
 
+    // Copy action only makes sense on a finished assistant reply -- the last
+    // message while a stream is still in flight is still growing, so it's
+    // excluded to avoid copying a half-written response.
     function renderChat() {
       const hasMessages = messages.length > 0;
       emptyStateEl.style.display = hasMessages ? 'none' : 'flex';
       chatLog.querySelectorAll('.message-row').forEach((el) => el.remove());
-      messages.forEach((m) => {
+      messages.forEach((m, i) => {
         const row = document.createElement('div');
         row.className = 'message-row ' + m.role;
-        const inner = m.role === 'user'
-          ? '<div class="content"><div class="bubble">' + renderMarkdown(m.content) + '</div></div>'
-          : '<div class="content">' + renderMarkdown(m.content) + '</div>';
-        row.innerHTML = inner;
+        if (m.role === 'user') {
+          row.innerHTML = '<div class="content"><div class="bubble">' + renderMarkdown(m.content) + '</div></div>';
+        } else {
+          const isLastAndStreaming = streaming && i === messages.length - 1;
+          const actions = isLastAndStreaming ? '' :
+            '<div class="msg-actions"><button class="icon-btn copy-btn" data-i="' + i + '">Copy</button></div>';
+          row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + actions + '</div>';
+        }
         chatLog.appendChild(row);
       });
       if (stickToBottom) chatLog.scrollTop = chatLog.scrollHeight;
     }
     chatLog.addEventListener('scroll', () => {
       stickToBottom = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 40;
+    });
+    chatLog.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.copy-btn');
+      if (!btn) return;
+      const i = Number(btn.dataset.i);
+      await navigator.clipboard.writeText(messages[i].content);
+      const original = btn.textContent;
+      btn.textContent = 'Copied';
+      setTimeout(() => { btn.textContent = original; }, 1500);
     });
 
     function renderThreadList() {
@@ -328,6 +356,7 @@
       destroySession();
       activeThreadId = null;
       messages = [];
+      streaming = false;
       stickToBottom = true;
       renderChat();
       renderThreadList();
@@ -339,6 +368,7 @@
       destroySession();
       activeThreadId = id;
       messages = loadThreadMessages(id);
+      streaming = false;
       stickToBottom = true;
       renderChat();
       renderThreadList();
@@ -408,15 +438,19 @@
         }
         const assistantMsg = { role: 'assistant', content: '' };
         messages.push(assistantMsg);
+        streaming = true;
         renderChat();
         const stream = session.promptStreaming([{ role: 'user', content: [{ type: 'text', value: text }] }]);
         for await (const chunk of stream) {
           assistantMsg.content += chunk;
           renderChat();
         }
+        streaming = false;
+        renderChat(); // re-render once more so the finished reply gets its Copy button
         chatNote.textContent = '';
         persistActiveThread();
       } catch (e) {
+        streaming = false;
         chatNote.textContent = 'Error: ' + e.message;
       }
       chatSendBtn.disabled = false;
