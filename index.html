@@ -106,7 +106,16 @@
   .status-pill.unavailable, .status-pill.missing { color: var(--bad); }
 
   /* --- Main column --- */
-  #main-col { display: flex; flex-direction: column; height: 100%; min-width: 0; }
+  #main-col { display: flex; flex-direction: column; height: 100%; min-width: 0; position: relative; }
+  #scroll-bottom-btn {
+    position: absolute; bottom: 88px; left: 50%; transform: translateX(-50%);
+    width: 2.2rem; height: 2.2rem; border-radius: 50%;
+    background: var(--bg); border: 1px solid var(--border); color: var(--fg);
+    box-shadow: 0 2px 8px rgba(0,0,0,.15);
+    display: flex; align-items: center; justify-content: center; font-size: 1rem;
+    z-index: 5;
+  }
+  #scroll-bottom-btn:hover { background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
   #chat-header {
     flex-shrink: 0;
     display: flex; align-items: center; gap: 0.75rem;
@@ -230,6 +239,7 @@
       <div id="chat-log">
         <div class="empty-state" id="empty-state">Ask something to start a new conversation.</div>
       </div>
+      <button id="scroll-bottom-btn" style="display:none;" aria-label="Scroll to bottom">↓</button>
       <div id="composer">
         <div class="composer-shell">
           <div class="composer-box">
@@ -252,6 +262,7 @@
     const threadSearchInput = document.getElementById('thread-search');
     const emptyStateEl = document.getElementById('empty-state');
     const chatLog = document.getElementById('chat-log');
+    const scrollBottomBtn = document.getElementById('scroll-bottom-btn');
     const chatInput = document.getElementById('chat-input');
     const chatSendBtn = document.getElementById('chat-send-btn');
     const chatStopBtn = document.getElementById('chat-stop-btn');
@@ -378,10 +389,19 @@
           ta.setSelectionRange(ta.value.length, ta.value.length);
         }
       }
-      if (stickToBottom) chatLog.scrollTop = chatLog.scrollHeight;
+      if (stickToBottom) {
+        chatLog.scrollTop = chatLog.scrollHeight;
+        scrollBottomBtn.style.display = 'none';
+      }
     }
     chatLog.addEventListener('scroll', () => {
       stickToBottom = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 40;
+      scrollBottomBtn.style.display = stickToBottom ? 'none' : 'flex';
+    });
+    scrollBottomBtn.addEventListener('click', () => {
+      stickToBottom = true;
+      chatLog.scrollTop = chatLog.scrollHeight;
+      scrollBottomBtn.style.display = 'none';
     });
     chatLog.addEventListener('click', async (e) => {
       const copyBtn = e.target.closest('.copy-btn');
