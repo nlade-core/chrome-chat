@@ -6,7 +6,15 @@ A familiar, modern chat-app interface running entirely on Chrome's built-in Gemi
 
 Built directly on two pages from [`pages-lab-ai`](https://github.com/nlade-core/pages-lab-ai): `chat-threads` (multiple saved conversations in `localStorage`, replayed into the model only on demand) and `assistant` (markdown rendering, further chat polish). This repo takes that same underlying mechanism and gives it the full-height app-shell interface modern AI chat apps use — a dark sidebar of past conversations, centered chat column, bubble-less assistant replies — rather than `pages-lab-ai`'s boxed-panel, scrolling-document house style.
 
-**v1 scope, deliberately:** basic chat plus persisted conversation history. Copy/regenerate/edit-message, stop-generation, and a context-limit warning are designed and documented but intentionally not built yet — staged for a follow-up pass rather than shipped all at once.
+## Features
+
+- Multiple saved conversations, listed in the sidebar, backed by `localStorage`
+- Streaming replies with Markdown rendering
+- Copy a finished reply to the clipboard
+- Stop generation mid-stream
+- Regenerate the last reply
+- Edit a previous message and resend
+- A warning once a conversation gets close to the model's context limit
 
 ## Requirements
 
@@ -31,6 +39,10 @@ End to end with Playwright, stubbing `window.LanguageModel` (this is an ordinary
 - Sending a message creates exactly one session; a second "+ New chat" doesn't create another one until you actually send.
 - Reopening a saved conversation replays the *exact* saved history into a fresh session via `initialPrompts` — confirmed by inspecting the real argument passed to `create()`, not just checking the UI.
 - A response containing a literal `<script>` tag and Markdown formatting renders as inert escaped text with the formatting intact — no real script executes.
+- Stop generation cancels the stream immediately via a real `AbortSignal`; no further chunks land even if the underlying call resumes afterward, and the partial reply still gets a Copy button.
+- Regenerating the last reply preserves every earlier exchange (confirmed via the exact `initialPrompts` sent to the recreated session), drops only the pair being regenerated, and resends the real original message — not a placeholder.
+- Editing a message truncates the conversation correctly, repopulates the input, and a resend afterward recreates the session with the true preserved history rather than silently forgetting it.
+- The context-limit warning fires only once real usage crosses 85% of the window, and clears on a new chat.
 
 **Not yet verified:** real Gemini Nano answer quality, real streaming latency, and real `contextWindow`/`contextUsage` figures — all need testing in actual Chrome, not a stub.
 
