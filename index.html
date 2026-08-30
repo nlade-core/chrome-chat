@@ -123,6 +123,15 @@
     border-radius: 1.25rem; padding: 0.6rem 1rem;
   }
   .message-row.user .msg-actions { margin-top: 0.3rem; margin-right: 0.2rem; }
+  .message-row.user .user-wrap.edit-mode { width: 100%; max-width: 34rem; align-items: stretch; }
+  .edit-textarea {
+    width: 100%; min-height: 3rem; max-height: 260px;
+    border: 1px solid var(--accent); border-radius: 1rem;
+    background: var(--bg); color: var(--fg);
+    padding: 0.6rem 1rem; resize: none; overflow-y: auto; line-height: 1.4;
+  }
+  .edit-textarea:focus { outline: none; }
+  .save-edit-btn { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
   .md > *:first-child { margin-top: 0; }
   .md > *:last-child { margin-bottom: 0; }
   .md p, .md ul, .md ol { margin: 0.6rem 0; }
@@ -256,6 +265,7 @@
     let session = null;
     let messages = [];
     let activeThreadId = null;
+    let editingIndex = null; // index of the user message currently being edited inline, or null
 
     async function checkCapability() {
       if (!self.LanguageModel) {
@@ -299,9 +309,23 @@
         const row = document.createElement('div');
         row.className = 'message-row ' + m.role;
         if (m.role === 'user') {
-          const editBtn = (!streaming && (i === lastIndex || i === lastIndex - 1))
-            ? '<div class="msg-actions"><button class="icon-btn edit-btn" data-i="' + i + '">Edit</button></div>' : '';
-          row.innerHTML = '<div class="content"><div class="user-wrap"><div class="bubble">' + renderMarkdown(m.content) + '</div>' + editBtn + '</div></div>';
+          if (i === editingIndex) {
+            row.innerHTML = '<div class="content"><div class="user-wrap edit-mode">' +
+              '<textarea class="edit-textarea" data-i="' + i + '">' + escapeHtml(m.content) + '</textarea>' +
+              '<div class="msg-actions">' +
+                '<button class="icon-btn cancel-edit-btn" data-i="' + i + '">Cancel</button>' +
+                '<button class="icon-btn save-edit-btn" data-i="' + i + '">Save &amp; submit</button>' +
+              '</div></div></div>';
+          } else {
+            // Only offered on the last exchange, and only when nothing else
+            // is already being edited -- editing an earlier message would
+            // discard every later turn anyway (an inherent consequence of
+            // sequential conversation context, not just a UI safety choice),
+            // and one edit at a time keeps the interaction simple.
+            const editBtn = (!streaming && editingIndex === null && (i === lastIndex || i === lastIndex - 1))
+              ? '<div class="msg-actions"><button class="icon-btn edit-btn" data-i="' + i + '">Edit</button></div>' : '';
+            row.innerHTML = '<div class="content"><div class="user-wrap"><div class="bubble">' + renderMarkdown(m.content) + '</div>' + editBtn + '</div></div>';
+          }
         } else {
           const isLastAndStreaming = streaming && i === lastIndex;
           let actions = '';
@@ -316,6 +340,15 @@
         }
         chatLog.appendChild(row);
       });
+      if (editingIndex !== null) {
+        const ta = chatLog.querySelector('.edit-textarea[data-i="' + editingIndex + '"]');
+        if (ta) {
+          ta.style.height = 'auto';
+          ta.style.height = ta.scrollHeight + 'px';
+          ta.focus();
+          ta.setSelectionRange(ta.value.length, ta.value.length);
+        }
+      }
       if (stickToBottom) chatLog.scrollTop = chatLog.scrollHeight;
     }
     chatLog.addEventListener('scroll', () => {
@@ -332,9 +365,34 @@
         return;
       }
       const editBtn = e.target.closest('.edit-btn');
-      if (editBtn) { editMessage(Number(editBtn.dataset.i)); return; }
+      if (editBtn) { startEdit(Number(editBtn.dataset.i)); return; }
+      const cancelEditBtn = e.target.closest('.cancel-edit-btn');
+      if (cancelEditBtn) { cancelEdit(); return; }
+      const saveEditBtn = e.target.closest('.save-edit-btn');
+      if (saveEditBtn) {
+        const i = Number(saveEditBtn.dataset.i);
+        const textarea = chatLog.querySelector('.edit-textarea[data-i="' + i + '"]');
+        await confirmEdit(i, textarea.value);
+        return;
+      }
       const regenBtn = e.target.closest('.regen-btn');
       if (regenBtn) { regenerateFrom(Number(regenBtn.dataset.i)); return; }
+    });
+    chatLog.addEventListener('input', (e) => {
+      if (!e.target.matches('.edit-textarea')) return;
+      e.target.style.height = 'auto';
+      e.target.style.height = e.target.scrollHeight + 'px';
+    });
+    chatLog.addEventListener('keydown', async (e) => {
+      if (!e.target.matches('.edit-textarea')) return;
+      const i = Number(e.target.dataset.i);
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        await confirmEdit(i, e.target.value);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelEdit();
+      }
     });
 
     function renderThreadList() {
@@ -383,6 +441,7 @@
       activeThreadId = null;
       messages = [];
       streaming = false;
+      editingIndex = null;
       stickToBottom = true;
       renderChat();
       renderThreadList();
@@ -396,6 +455,7 @@
       activeThreadId = id;
       messages = loadThreadMessages(id);
       streaming = false;
+      editingIndex = null;
       stickToBottom = true;
       renderChat();
       renderThreadList();
@@ -536,20 +596,36 @@
       await sendText(text);
     }
 
-    function editMessage(userIndex) {
-      if (streaming) return;
-      chatInput.value = messages[userIndex].content;
-      autoResize();
-      chatInput.focus();
-      // Truncate back to before this message -- a live session's internal
-      // context can't be rewound, so it's destroyed here and correctly
-      // recreated (with whatever prefix remains) the next time sendText runs.
-      messages = messages.slice(0, userIndex);
+    // Entering edit mode touches nothing but `editingIndex` -- messages,
+    // the session, and everything else stay completely untouched until the
+    // edit is actually confirmed. That's the whole fix for the earlier
+    // behavior: clicking Edit used to truncate the conversation immediately,
+    // with no way back if you changed your mind partway through.
+    function startEdit(i) {
+      if (streaming || editingIndex !== null) return;
+      editingIndex = i;
+      renderChat();
+    }
+
+    // Cancel reverts the display back to the plain bubble -- nothing was
+    // ever mutated, so there's nothing to restore.
+    function cancelEdit() {
+      editingIndex = null;
+      renderChat();
+    }
+
+    async function confirmEdit(i, newText) {
+      const text = newText.trim();
+      editingIndex = null;
+      if (!text) { renderChat(); return; } // an empty submit just reverts, same as Cancel
+      // Only now -- with a real, confirmed replacement text in hand -- do we
+      // actually truncate and destroy the session. A live session's internal
+      // context can't be rewound, so it's recreated (with whatever prefix
+      // remains) the next time sendText runs.
+      messages = messages.slice(0, i);
       destroySession();
       stickToBottom = true;
-      renderChat();
-      chatNote.textContent = 'Edit your message and send — the conversation after this point has been cleared.';
-      chatNote.classList.remove('warn');
+      await sendText(text);
     }
 
     async function regenerateFrom(assistantIndex) {
