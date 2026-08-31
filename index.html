@@ -124,15 +124,6 @@
 
   /* --- Main column --- */
   #main-col { display: flex; flex-direction: column; height: 100%; min-width: 0; position: relative; }
-  #scroll-bottom-btn {
-    position: absolute; bottom: 88px; left: 50%; transform: translateX(-50%);
-    width: 2.2rem; height: 2.2rem; border-radius: 50%;
-    background: var(--bg); border: 1px solid var(--border); color: var(--fg);
-    box-shadow: 0 2px 8px rgba(0,0,0,.15);
-    display: flex; align-items: center; justify-content: center; font-size: 1rem;
-    z-index: 5;
-  }
-  #scroll-bottom-btn:hover { background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
   #chat-header {
     flex-shrink: 0;
     display: flex; align-items: center; gap: 0.75rem;
@@ -145,11 +136,32 @@
     background: transparent; border: none; color: var(--fg);
     font-size: 1.2rem; padding: 0.2rem 0.4rem;
   }
+  /* Everything below the header (log + composer) lives in its own flex
+     column so the header stays pinned at top regardless of which of the
+     two layouts below is active. */
+  #chat-area { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+  #scroll-bottom-btn {
+    position: absolute; bottom: 88px; left: 50%; transform: translateX(-50%);
+    width: 2.2rem; height: 2.2rem; border-radius: 50%;
+    background: var(--bg); border: 1px solid var(--border); color: var(--fg);
+    box-shadow: 0 2px 8px rgba(0,0,0,.15);
+    display: flex; align-items: center; justify-content: center; font-size: 1rem;
+    z-index: 5;
+  }
+  #scroll-bottom-btn:hover { background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
   #chat-log { flex: 1; min-height: 0; overflow-y: auto; }
   .empty-state {
     height: 100%; display: flex; align-items: center; justify-content: center;
     color: var(--muted); font-size: 1.1rem; text-align: center; padding: 1rem;
   }
+  /* Landing layout: a brand-new, not-yet-sent chat shows its composer
+     centered in the middle of the screen alongside the greeting, rather
+     than docked at the bottom -- switches to the normal docked layout the
+     instant the first message is sent (hasMessages flips true, .landing
+     comes off #chat-area on the very next render). */
+  #chat-area.landing { justify-content: center; }
+  #chat-area.landing #chat-log { flex: none; overflow: visible; }
+  #chat-area.landing .empty-state { height: auto; padding: 0 0 1.5rem; }
 
   .message-row { padding: 1.25rem clamp(1rem, 4vw, 2rem); }
   .message-row .content { max-width: 48rem; margin: 0 auto; }
@@ -274,24 +286,26 @@
         <button id="hamburger-btn" aria-label="Toggle sidebar">☰</button>
         <span style="color:var(--muted);">chrome-chat — Gemini Nano, 100% on-device</span>
       </div>
-      <div id="chat-log">
-        <div class="empty-state" id="empty-state">Ask something to start a new conversation.</div>
-      </div>
-      <button id="scroll-bottom-btn" style="display:none;" aria-label="Scroll to bottom">↓</button>
-      <div id="composer">
-        <div class="composer-shell">
-          <div class="attachment-chip" id="attachment-chip" style="display:none;">
-            <span id="attachment-name"></span>
-            <button id="remove-attachment-btn" aria-label="Remove attachment">×</button>
+      <div id="chat-area">
+        <div id="chat-log">
+          <div class="empty-state" id="empty-state">Ask something to start a new conversation.</div>
+        </div>
+        <button id="scroll-bottom-btn" style="display:none;" aria-label="Scroll to bottom">↓</button>
+        <div id="composer">
+          <div class="composer-shell">
+            <div class="attachment-chip" id="attachment-chip" style="display:none;">
+              <span id="attachment-name"></span>
+              <button id="remove-attachment-btn" aria-label="Remove attachment">×</button>
+            </div>
+            <div class="composer-box">
+              <button class="attach-btn" id="attach-btn" type="button" aria-label="Attach an image or audio clip">📎</button>
+              <input type="file" id="attach-input" accept="image/*,audio/*" style="display:none;">
+              <textarea id="chat-input" placeholder="Message chrome-chat…" rows="1"></textarea>
+              <button class="send-btn" id="chat-send-btn" disabled aria-label="Send">➤</button>
+              <button class="send-btn stop-btn" id="chat-stop-btn" style="display:none;" aria-label="Stop generating">■</button>
+            </div>
+            <div class="composer-note" id="chat-note"></div>
           </div>
-          <div class="composer-box">
-            <button class="attach-btn" id="attach-btn" type="button" aria-label="Attach an image or audio clip">📎</button>
-            <input type="file" id="attach-input" accept="image/*,audio/*" style="display:none;">
-            <textarea id="chat-input" placeholder="Message chrome-chat…" rows="1"></textarea>
-            <button class="send-btn" id="chat-send-btn" disabled aria-label="Send">➤</button>
-            <button class="send-btn stop-btn" id="chat-stop-btn" style="display:none;" aria-label="Stop generating">■</button>
-          </div>
-          <div class="composer-note" id="chat-note"></div>
         </div>
       </div>
     </div>
@@ -305,6 +319,7 @@
     const threadListEl = document.getElementById('thread-list');
     const threadSearchInput = document.getElementById('thread-search');
     const emptyStateEl = document.getElementById('empty-state');
+    const chatArea = document.getElementById('chat-area');
     const chatLog = document.getElementById('chat-log');
     const scrollBottomBtn = document.getElementById('scroll-bottom-btn');
     const chatInput = document.getElementById('chat-input');
@@ -600,6 +615,10 @@
       const isStreaming = conv.streaming;
       const hasMessages = msgs.length > 0;
       emptyStateEl.style.display = hasMessages ? 'none' : 'flex';
+      // A brand-new, not-yet-sent chat shows its composer centered with the
+      // greeting rather than docked at the bottom -- flips to the normal
+      // docked layout the instant the first message renders.
+      chatArea.classList.toggle('landing', !hasMessages);
       chatLog.querySelectorAll('.message-row').forEach((el) => el.remove());
       const lastIndex = msgs.length - 1;
       msgs.forEach((m, i) => {
@@ -839,6 +858,7 @@
       }
     }
     renderThreadList();
+    renderChat(); // establishes the correct initial layout (landing vs docked) on a fresh page load
 
     // Persists a SPECIFIC thread by id, reading its own conversation slot --
     // never the currently-displayed one. This is the other half of the
