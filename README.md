@@ -8,7 +8,7 @@ Built directly on two pages from [`pages-lab-ai`](https://github.com/nlade-core/
 
 ## Features
 
-- Multiple saved conversations, listed in the sidebar, backed by `localStorage`
+- Multiple saved conversations, listed in the sidebar, backed by `localStorage`, each given a real generated title (a genuine short model summary of your first message, not just a truncated substring of it) once its first reply finishes
 - Streaming replies with Markdown rendering
 - Copy a finished reply to the clipboard
 - Stop generation mid-stream
@@ -69,6 +69,7 @@ End to end with Playwright, stubbing `window.LanguageModel` (this is an ordinary
 - Revisiting a conversation you were just looking at seconds ago skips recreating its session entirely (confirmed via `create()` call counts); a conversation genuinely untouched long enough to fall out of the idle cache still correctly gets a fresh session on reopen, and a recently-touched one survives even after newer conversations push the cache past its limit (recency-based eviction, not simple insertion order).
 - The centered landing layout appears on every fresh blank chat (including right after a page load, confirmed by bounding-box position) and switches to the normal docked layout the instant the first message is sent; opening any saved, non-empty thread never shows it.
 - The landing-screen prewarm fires only when the model is confirmed available (never when a download would be needed — the warning shows instead) and is genuinely adopted by the first message sent, not duplicated (confirmed via `create()` call counts staying at one); opening a different, real existing thread while a prewarm is still unclaimed destroys it rather than leaking it.
+- Generated titles use their own separate, throwaway session (confirmed via distinct `create()` calls) rather than the real conversational one, fire only once per conversation, and — measured directly, not assumed — never delay the reply they follow: a reply's own completion time is identical whether or not a slow title-generation call is running alongside it. One known gap, found while verifying this and not yet addressed: a fast follow-up sent while a title-gen call is still in flight elsewhere isn't currently reflected in the "queued behind another reply" indicator, since title-gen sessions aren't tracked the same way conversation sessions are.
 
 **Not yet verified:** real Gemini Nano answer quality, real streaming latency, real `contextWindow`/`contextUsage` figures, and real multimodal understanding (does it actually describe an attached image sensibly) — all need testing in actual Chrome, not a stub.
 
