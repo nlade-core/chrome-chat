@@ -394,19 +394,24 @@
     // in editMessage/regenerateFrom) -- showing the action only where it's
     // actually reachable avoids a button that looks available but silently
     // deletes a bunch of later conversation when clicked.
-    // Attachments only live in memory (attachmentFile), never in localStorage
-    // -- persistActiveThread() strips the File object before saving, since
+    // Attachments only live in memory (attachmentUrl), never in localStorage
+    // -- persistActiveThread() strips the blob URL before saving, since
     // localStorage is text-only and there's no IndexedDB-scale storage here
-    // for real binary data. If the file is still in memory (this page load,
+    // for real binary data. If the blob URL is still live (this page load,
     // not yet reloaded), show a real preview; otherwise show a plain marker
     // so the visitor knows something was there rather than it just vanishing
     // silently.
+    // attachmentUrl is created once, at send time (see sendText), and reused
+    // here on every re-render -- renderChat() rebuilds every row from scratch
+    // on every streamed chunk of a reply, so calling createObjectURL() fresh
+    // in here would mint a brand-new blob URL many times a second, forcing
+    // the browser to redecode the image from scratch each time and visibly
+    // flicker/reflow while the *next* message streams in below it.
     function renderAttachmentHtml(m) {
-      if (m.attachmentFile) {
-        const url = URL.createObjectURL(m.attachmentFile);
+      if (m.attachmentUrl) {
         return m.attachmentType === 'image'
-          ? '<img class="msg-attachment-img" src="' + url + '" alt="Attached image">'
-          : '<audio class="msg-attachment-audio" controls src="' + url + '"></audio>';
+          ? '<img class="msg-attachment-img" src="' + m.attachmentUrl + '" alt="Attached image">'
+          : '<audio class="msg-attachment-audio" controls src="' + m.attachmentUrl + '"></audio>';
       }
       if (m.attachmentType) {
         return '<div class="msg-attachment-missing">📎 ' + m.attachmentType + ' attached (not saved across reloads)</div>';
@@ -669,14 +674,16 @@
       }
       updated.push(entry);
       saveIndex(updated);
-      // Strip the live File reference before persisting -- localStorage is
-      // text-only, and a File wouldn't survive JSON.stringify cleanly anyway
-      // (it'd serialize as an empty object rather than throw). The in-memory
-      // `messages` array keeps the real attachmentFile for as long as this
-      // page stays loaded; only the saved copy drops it.
+      // Strip the blob URL before persisting -- it's a plain string so it
+      // WOULD serialize "successfully", but blob URLs don't survive a reload
+      // (the page that created them is gone), so a saved one would just be a
+      // dead reference producing a broken image rather than the honest
+      // "not saved across reloads" marker. The in-memory `messages` array
+      // keeps the real attachmentUrl for as long as this page stays loaded;
+      // only the saved copy drops it.
       const storableMessages = messages.map((m) => {
-        if (!m.attachmentFile) return m;
-        const { attachmentFile, ...rest } = m;
+        if (!m.attachmentUrl) return m;
+        const { attachmentUrl, ...rest } = m;
         return rest;
       });
       saveThreadMessages(activeThreadId, storableMessages);
@@ -902,7 +909,7 @@
       if ((!text && !attachment) || !promptOk) return;
       chatSendBtn.disabled = true;
       const userMsg = { role: 'user', content: text };
-      if (attachment) { userMsg.attachmentType = attachment.type; userMsg.attachmentFile = attachment.file; }
+      if (attachment) { userMsg.attachmentType = attachment.type; userMsg.attachmentUrl = URL.createObjectURL(attachment.file); }
       messages.push(userMsg);
       stickToBottom = true;
       renderChat();
