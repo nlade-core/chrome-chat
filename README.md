@@ -21,6 +21,7 @@ Built directly on two pages from [`pages-lab-ai`](https://github.com/nlade-core/
 - A "scroll to bottom" button that appears once you've scrolled up mid-conversation
 - **Conversation forking**: editing a message offers "Fork" alongside "Save & submit" — instead of overwriting, it creates a brand-new conversation with everything before the edit preserved, leaving the original completely untouched. Forked conversations collapse into a single sidebar entry (the original's title + a count badge); expanding it shows every version — original and forks alike — as neutral peers with a relation tag and last-updated time, no version auto-selected as "main". Forking a fork still traces back to the true original, however deep the chain.
 - **Multimodal input**: attach an image or audio clip alongside your message. The attachment persists across reloads and browser restarts, same as everything else — the real image/audio renders again the next time you open that conversation, not just a memory of it having existed.
+- **Response timing**: each finished reply shows how long it actually took — time to first token and total duration — a quick, honest answer to "is this slow, does an image slow it down," measured live rather than assumed. In-memory only, not saved across a reload.
 
 ## Requirements
 
