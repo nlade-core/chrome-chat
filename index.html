@@ -98,6 +98,7 @@
   .thread-item .thread-delete:hover { background: #ff7b7222; color: #ff7b72; }
   .thread-item .thread-delete.confirming { background: #ff7b7222; color: #ff7b72; font-weight: 600; }
   .empty-hint { color: #9b9b9b; font-size: 0.8rem; padding: 0.6rem; }
+  .thread-generating { color: #3fb950; font-size: 0.55rem; flex-shrink: 0; }
   .family-row {
     display: flex; align-items: center; gap: 0.3rem;
     padding: 0.6rem 0.6rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
@@ -424,6 +425,16 @@
     }
 
     function deleteThread(id) {
+      // If this thread has a live, still-streaming conversation, stop it
+      // first and drop its slot -- otherwise its eventual completion would
+      // call persistThread(id) again and silently resurrect the very
+      // thread just deleted.
+      const conv = conversations.get(id);
+      if (conv) {
+        if (conv.abortController) conv.abortController.abort();
+        if (conv.session) { try { conv.session.destroy(); } catch {} }
+        conversations.delete(id);
+      }
       const msgs = loadThreadMessages(id);
       localStorage.removeItem(threadKey(id));
       const remainingIndex = loadIndex().filter((t) => t.id !== id);
@@ -436,11 +447,38 @@
     }
 
     let promptOk = false;
-    let streaming = false;
-    let session = null;
-    let messages = [];
-    let activeThreadId = null;
-    let pendingForkMeta = null; // { forkedFrom, forkRoot } to attach the next time persistActiveThread() mints a brand-new thread id
+    // Each conversation gets its own isolated slot -- {messages, session,
+    // streaming, abortController, forkMeta} -- keyed by thread id, instead of
+    // one shared set of globals. This is what makes it safe to switch away
+    // from a thread while it's still generating a reply: switching only
+    // changes which slot is DISPLAYED (activeThreadId); it never touches
+    // another slot's live session or in-flight generation. A slot is created
+    // the moment a thread's first message is actually sent, or the moment an
+    // existing saved thread is opened, and is dropped again once you
+    // navigate away from it PROVIDED it isn't still streaming -- an
+    // in-flight reply keeps its slot alive and keeps running (and will still
+    // save correctly) even after you've switched to something else. Fixes a
+    // real, reproduced bug: previously a single shared `messages`/
+    // `activeThreadId` meant switching threads mid-reply could silently lose
+    // the in-flight exchange, or even mint a stray thread id that hijacked
+    // whatever the *new* thread was about to save under.
+    const conversations = new Map();
+    const EMPTY_CONV = { messages: [], session: null, streaming: false, abortController: null };
+    let activeThreadId = null; // which conversation is CURRENTLY DISPLAYED; null = a blank, not-yet-sent new chat
+    function activeConv() { return conversations.get(activeThreadId) || EMPTY_CONV; }
+    // Called before switching the DISPLAYED thread away from prevId. An idle
+    // conversation's session is destroyed and its slot dropped (cheap to
+    // reload from storage if revisited); an actively-streaming one is
+    // deliberately left alone so it keeps generating and saves correctly
+    // once it finishes, even though it's no longer what's on screen.
+    function leaveThread(prevId) {
+      if (prevId == null) return;
+      const conv = conversations.get(prevId);
+      if (conv && !conv.streaming) {
+        if (conv.session) { try { conv.session.destroy(); } catch {} }
+        conversations.delete(prevId);
+      }
+    }
     let editingIndex = null; // index of the user message currently being edited inline, or null
     let renamingId = null; // thread id currently showing an inline rename input, or null
     let pendingDeleteId = null; // thread id armed for delete on a second click, or null
@@ -486,7 +524,7 @@
     // The real blob is durable, stored in IndexedDB and referenced by
     // attachmentId (see putBlob/getBlob above); attachmentUrl is just an
     // in-memory display cache -- an object URL only ever valid for this page
-    // load, never persisted (persistActiveThread strips it). A freshly sent
+    // load, never persisted (persistThread strips it). A freshly sent
     // message gets its attachmentUrl immediately in sendText; a restored one
     // gets it asynchronously via hydrateAttachments before its first render.
     // attachmentUrl is only ever created ONCE per message and reused on every
@@ -508,11 +546,14 @@
     }
 
     function renderChat() {
-      const hasMessages = messages.length > 0;
+      const conv = activeConv();
+      const msgs = conv.messages;
+      const isStreaming = conv.streaming;
+      const hasMessages = msgs.length > 0;
       emptyStateEl.style.display = hasMessages ? 'none' : 'flex';
       chatLog.querySelectorAll('.message-row').forEach((el) => el.remove());
-      const lastIndex = messages.length - 1;
-      messages.forEach((m, i) => {
+      const lastIndex = msgs.length - 1;
+      msgs.forEach((m, i) => {
         const row = document.createElement('div');
         row.className = 'message-row ' + m.role;
         if (m.role === 'user') {
@@ -540,16 +581,16 @@
             // cancelEdit), so there's no need to restrict *which* message
             // can be opened; the discard warning above is what protects
             // against a surprise when actually confirming one.
-            const editBtn = (!streaming && editingIndex === null)
+            const editBtn = (!isStreaming && editingIndex === null)
               ? '<div class="msg-actions"><button class="icon-btn edit-btn" data-i="' + i + '">Edit</button></div>' : '';
             row.innerHTML = '<div class="content"><div class="user-wrap"><div class="bubble">' + renderAttachmentHtml(m) + renderMarkdown(m.content) + '</div>' + editBtn + '</div></div>';
           }
         } else {
-          const isLastAndStreaming = streaming && i === lastIndex;
+          const isLastAndStreaming = isStreaming && i === lastIndex;
           let actions = '';
           if (!isLastAndStreaming) {
             actions = '<div class="msg-actions"><button class="icon-btn copy-btn" data-i="' + i + '">Copy</button>';
-            if (i === lastIndex && !streaming) {
+            if (i === lastIndex && !isStreaming) {
               actions += '<button class="icon-btn regen-btn" data-i="' + i + '">Regenerate</button>';
             }
             actions += '</div>';
@@ -590,7 +631,7 @@
       const copyBtn = e.target.closest('.copy-btn');
       if (copyBtn) {
         const i = Number(copyBtn.dataset.i);
-        await navigator.clipboard.writeText(messages[i].content);
+        await navigator.clipboard.writeText(activeConv().messages[i].content);
         const original = copyBtn.textContent;
         copyBtn.textContent = 'Copied';
         setTimeout(() => { copyBtn.textContent = original; }, 1500);
@@ -665,8 +706,16 @@
         ? '<input class="thread-rename-input" data-id="' + t.id + '" value="' + escapeHtml(t.title) + '">'
         : '<span class="thread-title">' + escapeHtml(t.title) + '</span>';
       const deleteLabel = t.id === pendingDeleteId ? 'Sure?' : '×';
+      // A background conversation (not the one currently displayed) that's
+      // still streaming gets a small live indicator -- otherwise switching
+      // away from an in-flight reply would look identical to it having been
+      // lost, even though it's now genuinely still generating and will save
+      // correctly once it finishes.
+      const bgConv = conversations.get(t.id);
+      const generatingHtml = (bgConv && bgConv.streaming && t.id !== activeThreadId)
+        ? '<span class="thread-generating" title="Still generating a reply">●</span>' : '';
       const row = '<div class="thread-item ' + (indented ? 'family-child ' : '') + (t.id === activeThreadId ? 'active' : '') + '" data-id="' + t.id + '">' +
-        titleHtml +
+        titleHtml + generatingHtml +
         (t.id === renamingId ? '' : '<button class="thread-rename" data-id="' + t.id + '" title="Rename">✎</button>') +
         '<button class="thread-delete ' + (t.id === pendingDeleteId ? 'confirming' : '') + '" data-id="' + t.id + '" title="Delete">' + deleteLabel + '</button>' +
       '</div>';
@@ -740,27 +789,28 @@
     }
     renderThreadList();
 
-    function destroySession() {
-      if (session) { try { session.destroy(); } catch {} }
-      session = null;
-    }
-
-    function persistActiveThread() {
-      const isNewThread = activeThreadId === null;
-      if (isNewThread) activeThreadId = crypto.randomUUID();
+    // Persists a SPECIFIC thread by id, reading its own conversation slot --
+    // never the currently-displayed one. This is the other half of the
+    // background-generation fix: a reply always saves to the thread it
+    // actually belongs to, regardless of whatever the visitor has since
+    // switched to. Called once immediately when the user's own message is
+    // sent (so it's never lost even if the reply is interrupted) and again
+    // once the reply finishes.
+    function persistThread(threadId) {
+      const conv = conversations.get(threadId);
+      if (!conv) return; // deleted (see deleteThread) while this was in flight -- nothing to save
       const index = loadIndex();
-      const existing = index.find((t) => t.id === activeThreadId);
-      const title = existing ? existing.title : titleFrom(messages[0]?.content || 'New chat');
-      const updated = index.filter((t) => t.id !== activeThreadId);
-      const entry = { id: activeThreadId, title, updatedAt: Date.now() };
+      const existing = index.find((t) => t.id === threadId);
+      const title = existing ? existing.title : titleFrom(conv.messages[0]?.content || 'New chat');
+      const updated = index.filter((t) => t.id !== threadId);
+      const entry = { id: threadId, title, updatedAt: Date.now() };
       // Lineage fields, once set, must survive every later save of this same
-      // thread -- persistActiveThread rebuilds the whole index entry from
-      // scratch each time, so without this they'd silently vanish after the
-      // fork's very first message.
-      if (isNewThread && pendingForkMeta) {
-        entry.forkedFrom = pendingForkMeta.forkedFrom;
-        entry.forkRoot = pendingForkMeta.forkRoot;
-        pendingForkMeta = null;
+      // thread -- this rebuilds the whole index entry from scratch each
+      // time, so without this they'd silently vanish after the fork's very
+      // first message.
+      if (!existing && conv.forkMeta) {
+        entry.forkedFrom = conv.forkMeta.forkedFrom;
+        entry.forkRoot = conv.forkMeta.forkRoot;
       } else if (existing && existing.forkedFrom) {
         entry.forkedFrom = existing.forkedFrom;
         entry.forkRoot = existing.forkRoot;
@@ -776,12 +826,12 @@
       // only the saved copy drops it. timingMs is dropped too -- it's a
       // quick diagnostic for this page load only, not meant to be a
       // permanent saved record.
-      const storableMessages = messages.map((m) => {
+      const storableMessages = conv.messages.map((m) => {
         if (!m.attachmentUrl && !m.timingMs) return m;
         const { attachmentUrl, timingMs, ...rest } = m;
         return rest;
       });
-      saveThreadMessages(activeThreadId, storableMessages);
+      saveThreadMessages(threadId, storableMessages);
       renderThreadList();
     }
 
@@ -796,12 +846,13 @@
     }
 
     function startNewChat() {
-      destroySession();
+      leaveThread(activeThreadId);
       activeThreadId = null;
-      messages = [];
-      streaming = false;
       editingIndex = null;
       stickToBottom = true;
+      chatSendBtn.style.display = 'flex';
+      chatStopBtn.style.display = 'none';
+      chatSendBtn.disabled = !promptOk; // a blank new chat has no session/streaming of its own to wait on
       renderChat();
       renderThreadList();
       chatNote.textContent = '';
@@ -810,12 +861,26 @@
     }
 
     async function openThread(id) {
-      destroySession();
+      if (id === activeThreadId) { closeSidebarMobile(); return; }
+      leaveThread(activeThreadId);
       activeThreadId = id;
-      messages = loadThreadMessages(id);
-      streaming = false;
       editingIndex = null;
       stickToBottom = true;
+      // Reuse an already-live slot as-is (e.g. one still streaming in the
+      // background, or one just idly kept from an earlier visit this page
+      // load) rather than reloading a possibly-stale snapshot over top of
+      // its real, current in-memory state.
+      let conv = conversations.get(id);
+      if (!conv) {
+        conv = { messages: loadThreadMessages(id), session: null, streaming: false, abortController: null, forkMeta: null };
+        conversations.set(id, conv);
+      }
+      chatSendBtn.style.display = conv.streaming ? 'none' : 'flex';
+      chatStopBtn.style.display = conv.streaming ? 'flex' : 'none';
+      // Reset explicitly rather than leaving whatever the PREVIOUSLY
+      // displayed thread happened to set -- Send's enabled state belongs to
+      // this thread's own conv now, not whatever was shown a moment ago.
+      if (!conv.streaming) chatSendBtn.disabled = !promptOk;
       renderChat();
       renderThreadList();
       // Fetching real attachment blobs from IndexedDB is async -- render the
@@ -823,30 +888,32 @@
       // blocking on it, then re-render once images/audio are ready. Guarded
       // by activeThreadId in case the visitor's already opened a different
       // thread by the time this resolves.
-      hydrateAttachments(messages).then(() => { if (activeThreadId === id) renderChat(); });
+      hydrateAttachments(conv.messages).then(() => { if (activeThreadId === id) renderChat(); });
       closeSidebarMobile();
-      if (!promptOk) return;
+      if (!promptOk || conv.streaming) return; // already generating (or API unavailable) -- nothing more to set up
+      if (conv.session) { chatSendBtn.disabled = false; return; } // already primed from an earlier visit this page load
       chatSendBtn.disabled = true;
       chatNote.textContent = 'Loading this conversation into the model…';
       try {
-        session = await LanguageModel.create({
-          initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages.map((m) => ({ role: m.role, content: m.content }))],
+        conv.session = await LanguageModel.create({
+          initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }, ...conv.messages.map((m) => ({ role: m.role, content: m.content }))],
           expectedInputs: [{ type: 'text' }, { type: 'image' }, { type: 'audio' }],
         });
-        chatNote.textContent = '';
-        warnIfNearLimit();
+        if (activeThreadId === id) { chatNote.textContent = ''; warnIfNearLimit(); }
       } catch (e) {
-        chatNote.textContent = 'Could not restore into the model: ' + e.message;
+        if (activeThreadId === id) chatNote.textContent = 'Could not restore into the model: ' + e.message;
       }
-      chatSendBtn.disabled = false;
+      if (activeThreadId === id) chatSendBtn.disabled = false;
     }
 
     // Reads the session's own real contextUsage/contextWindow numbers rather
     // than estimating from message length -- warns before a visitor actually
-    // hits a hard QuotaExceededError, not after.
+    // hits a hard QuotaExceededError, not after. Only ever called for
+    // whichever thread is currently displayed.
     function warnIfNearLimit() {
-      if (!session || session.contextUsage == null || session.contextWindow == null) return;
-      const ratio = session.contextUsage / session.contextWindow;
+      const conv = activeConv();
+      if (!conv.session || conv.session.contextUsage == null || conv.session.contextWindow == null) return;
+      const ratio = conv.session.contextUsage / conv.session.contextWindow;
       if (ratio > 0.85) {
         chatNote.textContent = (chatNote.textContent ? chatNote.textContent + ' ' : '') +
           'This conversation is getting close to its context limit — consider starting a new chat soon.';
@@ -962,51 +1029,61 @@
       attachmentChip.style.display = 'none';
     });
 
-    let abortController = null;
-
-    // Shared by a fresh send and (later) regenerate -- takes the exact turn
-    // content to send, assumes the user-side message is already in
-    // `messages` and rendered. Owns the streaming loop, the Stop button
-    // wiring, and persisting the thread once the reply is done.
-    async function streamReply(turnInput) {
+    // Shared by a fresh send, edit-and-resend, fork, and regenerate -- takes
+    // the exact turn content to send plus the thread id it belongs to
+    // (captured by the caller BEFORE this starts, never re-derived from
+    // whatever's currently displayed). Owns the streaming loop and persists
+    // the thread once the reply is done -- always to threadId's own slot,
+    // so a reply that's still generating after the visitor switches away
+    // completes correctly and saves to the right place instead of getting
+    // lost or attributed to whatever's since become active.
+    async function streamReply(threadId, turnInput) {
+      const conv = conversations.get(threadId);
+      const isShown = () => activeThreadId === threadId;
       const assistantMsg = { role: 'assistant', content: '' };
-      messages.push(assistantMsg);
-      streaming = true;
-      abortController = new AbortController();
-      chatSendBtn.style.display = 'none';
-      chatStopBtn.style.display = 'flex';
-      renderChat();
+      conv.messages.push(assistantMsg);
+      conv.streaming = true;
+      conv.abortController = new AbortController();
+      if (isShown()) {
+        chatSendBtn.style.display = 'none';
+        chatStopBtn.style.display = 'flex';
+        renderChat();
+      }
+      renderThreadList(); // reflects the new "generating" indicator even if this thread isn't displayed
       const startedAt = performance.now();
       let firstChunkAt = null;
       try {
-        const stream = session.promptStreaming(turnInput, { signal: abortController.signal });
+        const stream = conv.session.promptStreaming(turnInput, { signal: conv.abortController.signal });
         for await (const chunk of stream) {
           if (firstChunkAt === null) firstChunkAt = performance.now();
           assistantMsg.content += chunk;
-          renderChat();
+          if (isShown()) renderChat();
         }
-        chatNote.textContent = '';
+        if (isShown()) chatNote.textContent = '';
       } catch (e) {
-        chatNote.textContent = e.name === 'AbortError' ? 'Stopped.' : 'Error: ' + e.message;
+        if (isShown()) chatNote.textContent = e.name === 'AbortError' ? 'Stopped.' : 'Error: ' + e.message;
       }
-      streaming = false;
-      abortController = null;
-      chatSendBtn.style.display = 'flex';
-      chatStopBtn.style.display = 'none';
+      conv.streaming = false;
+      conv.abortController = null;
       // Quick, in-memory-only answer to "how long does this actually take" --
-      // never persisted (see persistActiveThread), easy to pull out later if
-      // it's not worth keeping around.
+      // never persisted (see persistThread), easy to pull out later if it's
+      // not worth keeping around.
       assistantMsg.timingMs = {
         total: Math.round(performance.now() - startedAt),
         firstChunk: firstChunkAt === null ? null : Math.round(firstChunkAt - startedAt),
       };
-      renderChat(); // re-render once more so the finished (or stopped) reply gets its Copy button + timing
-      warnIfNearLimit();
-      persistActiveThread();
+      if (isShown()) {
+        chatSendBtn.style.display = 'flex';
+        chatStopBtn.style.display = 'none';
+        renderChat(); // re-render once more so the finished (or stopped) reply gets its Copy button + timing
+        warnIfNearLimit();
+      }
+      persistThread(threadId); // always -- this reply belongs to threadId regardless of what's currently displayed
     }
 
     chatStopBtn.addEventListener('click', () => {
-      if (abortController) abortController.abort();
+      const conv = activeConv();
+      if (conv.abortController) conv.abortController.abort();
     });
 
     // Given a message that's about to be dropped by a truncating slice()
@@ -1026,16 +1103,34 @@
       return { type: m.attachmentType, id: m.attachmentId, url: m.attachmentUrl, blob };
     }
 
-    // Shared by a normal send, edit-and-resend, fork, and regenerate. Assumes
-    // `messages` already holds whatever prefix should survive (empty for a
-    // brand-new chat, or a truncated prior history otherwise). `attachment`
-    // is a fresh upload (mints a new stored blob + id); `carried` is an
-    // existing attachment being carried forward onto the replacement message
-    // (reuses its id/url, no duplicate blob stored) -- exactly one of the
-    // two is ever passed, never both.
-    async function sendText(text, attachment, carried) {
+    // Shared by a normal send, edit-and-resend, fork, and regenerate.
+    // `attachment` is a fresh upload (mints a new stored blob + id); `carried`
+    // is an existing attachment being carried forward onto the replacement
+    // message (reuses its id/url, no duplicate blob stored) -- exactly one
+    // of the two is ever passed, never both. `targetThreadId`, when given,
+    // is the thread this turn continues (captured by the caller before any
+    // of its own awaits, so it stays correct even if the visitor switches
+    // threads in the meantime); when omitted, this is a normal composer send
+    // -- continues whatever's currently active, or mints a brand-new,
+    // stable thread id immediately if this is a genuinely new chat (rather
+    // than lazily at the end of generation, which was the root cause of a
+    // real, reproduced bug where switching threads mid-reply could corrupt
+    // or lose data).
+    async function sendText(text, attachment, carried, targetThreadId) {
       if ((!text && !attachment && !carried) || !promptOk) return;
-      chatSendBtn.disabled = true;
+      let threadId = targetThreadId;
+      if (threadId == null) {
+        if (activeThreadId === null) {
+          threadId = crypto.randomUUID();
+          activeThreadId = threadId;
+          conversations.set(threadId, { messages: [], session: null, streaming: false, abortController: null, forkMeta: null });
+        } else {
+          threadId = activeThreadId;
+        }
+      }
+      const conv = conversations.get(threadId);
+      const isShown = () => activeThreadId === threadId;
+      if (isShown()) chatSendBtn.disabled = true;
       const userMsg = { role: 'user', content: text };
       let modelAttachment = null; // { type, file } actually sent to the model this turn
       if (attachment) {
@@ -1050,25 +1145,28 @@
         userMsg.attachmentUrl = carried.url || (carried.blob && URL.createObjectURL(carried.blob));
         if (carried.blob) modelAttachment = { type: carried.type, file: carried.blob };
       }
-      messages.push(userMsg);
-      stickToBottom = true;
-      renderChat();
-      chatNote.textContent = 'Generating…';
+      conv.messages.push(userMsg);
+      // Persist the user's own message right away -- independent of whether
+      // a reply ever finishes, or the visitor switches away before it does.
+      // Fixes "doesn't save unless it runs through": that used to only ever
+      // happen once, at the very end of the whole exchange.
+      persistThread(threadId);
+      if (isShown()) { stickToBottom = true; renderChat(); chatNote.textContent = 'Generating…'; }
 
       try {
-        if (!session) {
-          chatNote.textContent = 'Starting session (may download the model on first use)…';
-          // messages already includes the turn just pushed above -- seed
+        if (!conv.session) {
+          if (isShown()) chatNote.textContent = 'Starting session (may download the model on first use)…';
+          // conv.messages already includes the turn just pushed above -- seed
           // initialPrompts with everything BEFORE it. For a genuinely new
           // chat that's empty; after an edit/regenerate truncation it's the
           // real preserved history, so a freshly (re)created session doesn't
           // silently forget context that should still be there.
-          session = await LanguageModel.create({
-            initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages.slice(0, -1).map((m) => ({ role: m.role, content: m.content }))],
+          conv.session = await LanguageModel.create({
+            initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }, ...conv.messages.slice(0, -1).map((m) => ({ role: m.role, content: m.content }))],
             expectedInputs: [{ type: 'text' }, { type: 'image' }, { type: 'audio' }],
             monitor(m) {
               m.addEventListener('downloadprogress', (e) => {
-                chatNote.textContent = 'Downloading model… ' + Math.round(e.loaded * 100) + '%';
+                if (isShown()) chatNote.textContent = 'Downloading model… ' + Math.round(e.loaded * 100) + '%';
               });
             },
           });
@@ -1076,11 +1174,11 @@
         const content = [];
         if (text) content.push({ type: 'text', value: text });
         if (modelAttachment) content.push({ type: modelAttachment.type, value: modelAttachment.file });
-        await streamReply([{ role: 'user', content }]);
+        await streamReply(threadId, [{ role: 'user', content }]);
       } catch (e) {
-        chatNote.textContent = 'Error: ' + e.message;
+        if (isShown()) chatNote.textContent = 'Error: ' + e.message;
       }
-      chatSendBtn.disabled = false;
+      if (isShown()) chatSendBtn.disabled = false;
     }
 
     async function sendChat() {
@@ -1101,7 +1199,7 @@
     // behavior: clicking Edit used to truncate the conversation immediately,
     // with no way back if you changed your mind partway through.
     function startEdit(i) {
-      if (streaming || editingIndex !== null) return;
+      if (activeConv().streaming || editingIndex !== null) return;
       editingIndex = i;
       renderChat();
     }
@@ -1117,46 +1215,59 @@
       const text = newText.trim();
       editingIndex = null;
       if (!text) { renderChat(); return; } // an empty submit just reverts, same as Cancel
-      const carried = await carryAttachmentFrom(messages[i]);
+      // Captured up front, before the await below -- guarantees this keeps
+      // operating on the thread actually being edited even if the visitor
+      // somehow switches to a different one in the meantime.
+      const threadId = activeThreadId;
+      const conv = conversations.get(threadId);
+      const carried = await carryAttachmentFrom(conv.messages[i]);
       // Only now -- with a real, confirmed replacement text in hand -- do we
       // actually truncate and destroy the session. A live session's internal
       // context can't be rewound, so it's recreated (with whatever prefix
       // remains) the next time sendText runs.
-      messages = messages.slice(0, i);
-      destroySession();
-      stickToBottom = true;
-      await sendText(text, null, carried);
+      conv.messages = conv.messages.slice(0, i);
+      if (conv.session) { try { conv.session.destroy(); } catch {} conv.session = null; }
+      if (activeThreadId === threadId) stickToBottom = true;
+      await sendText(text, null, carried, threadId);
     }
 
-    // Same truncation as confirmEdit, but the ORIGINAL thread is left
-    // completely untouched -- forcing activeThreadId back to null makes
-    // persistActiveThread() mint a fresh id the next time this gets saved
-    // (inside sendText's streamReply call), rather than overwriting the
-    // thread being forked from.
+    // Same truncation as confirmEdit, but the ORIGINAL thread's own slot is
+    // left completely untouched (including its own live session, if it has
+    // one) -- a brand-new thread id and slot are minted directly for the
+    // fork instead, so there's no shared mutable state between the two.
     async function forkFrom(i, newText) {
       const text = newText.trim();
       editingIndex = null;
       if (!text) { renderChat(); return; }
 
-      const carried = await carryAttachmentFrom(messages[i]);
       const originalThreadId = activeThreadId;
+      const originalConv = conversations.get(originalThreadId);
+      const carried = await carryAttachmentFrom(originalConv.messages[i]);
       const originalEntry = loadIndex().find((t) => t.id === originalThreadId);
       const forkRoot = (originalEntry && originalEntry.forkRoot) || originalThreadId;
 
-      messages = messages.slice(0, i);
-      destroySession();
-      activeThreadId = null;
-      pendingForkMeta = { forkedFrom: originalThreadId, forkRoot };
+      // The ORIGINAL conversation's slot is left completely untouched (its
+      // own live session, if any, keeps running independently) -- only a
+      // fresh, truncated copy of its messages becomes the new fork.
+      const forkedMessages = originalConv.messages.slice(0, i);
+      const forkThreadId = crypto.randomUUID();
+      conversations.set(forkThreadId, {
+        messages: forkedMessages, session: null, streaming: false, abortController: null,
+        forkMeta: { forkedFrom: originalThreadId, forkRoot },
+      });
+      activeThreadId = forkThreadId;
       stickToBottom = true;
-      await sendText(text, null, carried);
+      await sendText(text, null, carried, forkThreadId);
     }
 
     async function regenerateFrom(assistantIndex) {
-      if (streaming || !session) return;
+      const threadId = activeThreadId;
+      const conv = conversations.get(threadId);
+      if (!conv || conv.streaming || !conv.session) return;
       const lastUserIndex = assistantIndex - 1;
-      if (lastUserIndex < 0 || messages[lastUserIndex].role !== 'user') return;
-      const textToResend = messages[lastUserIndex].content;
-      const carried = await carryAttachmentFrom(messages[lastUserIndex]);
+      if (lastUserIndex < 0 || conv.messages[lastUserIndex].role !== 'user') return;
+      const textToResend = conv.messages[lastUserIndex].content;
+      const carried = await carryAttachmentFrom(conv.messages[lastUserIndex]);
       // Same truncate-and-destroy path as editMessage, then immediately
       // resend the REAL prior text (not a filler string -- a real bug caught
       // in this exact spot during planning) plus its real attachment, if any
@@ -1164,11 +1275,10 @@
       // used to resend text-only, silently dropping the image from both the
       // transcript and the model's context) so the visible transcript and
       // the model's actual context never diverge.
-      messages = messages.slice(0, lastUserIndex);
-      destroySession();
-      stickToBottom = true;
-      renderChat();
-      await sendText(textToResend, null, carried);
+      conv.messages = conv.messages.slice(0, lastUserIndex);
+      if (conv.session) { try { conv.session.destroy(); } catch {} conv.session = null; }
+      if (activeThreadId === threadId) { stickToBottom = true; renderChat(); }
+      await sendText(textToResend, null, carried, threadId);
     }
 
     chatSendBtn.addEventListener('click', sendChat);
