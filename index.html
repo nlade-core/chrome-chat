@@ -341,7 +341,94 @@
     function saveIndex(list) { localStorage.setItem(INDEX_KEY, JSON.stringify({ version: SCHEMA_VERSION, threads: list })); }
     function loadThreadMessages(id) { try { return JSON.parse(localStorage.getItem(threadKey(id))) || []; } catch { return []; } }
     function saveThreadMessages(id, msgs) { localStorage.setItem(threadKey(id), JSON.stringify(msgs)); }
-    function deleteThread(id) { localStorage.removeItem(threadKey(id)); saveIndex(loadIndex().filter((t) => t.id !== id)); }
+    // Attachments (images/audio) are binary and can genuinely get large --
+    // localStorage is text-only with a small quota, so they live in their own
+    // IndexedDB store instead, referenced from a message by attachmentId
+    // rather than embedding the blob directly. Everything else (threads,
+    // messages, the index) stays in localStorage untouched -- this is a
+    // narrow, additive change, not a storage-layer rewrite.
+    const BLOB_DB_NAME = 'chrome-chat-attachments';
+    const BLOB_STORE_NAME = 'blobs';
+    let blobDbPromise = null;
+    function openBlobDb() {
+      if (!blobDbPromise) {
+        blobDbPromise = new Promise((resolve, reject) => {
+          const req = indexedDB.open(BLOB_DB_NAME, 1);
+          req.onupgradeneeded = () => req.result.createObjectStore(BLOB_STORE_NAME, { keyPath: 'id' });
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+      }
+      return blobDbPromise;
+    }
+    async function putBlob(blob) {
+      const db = await openBlobDb();
+      const id = crypto.randomUUID();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(BLOB_STORE_NAME, 'readwrite');
+        tx.objectStore(BLOB_STORE_NAME).put({ id, blob });
+        tx.oncomplete = () => resolve(id);
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+    async function getBlob(id) {
+      const db = await openBlobDb();
+      return new Promise((resolve, reject) => {
+        const req = db.transaction(BLOB_STORE_NAME, 'readonly').objectStore(BLOB_STORE_NAME).get(id);
+        req.onsuccess = () => resolve(req.result ? req.result.blob : undefined);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    async function deleteBlob(id) {
+      const db = await openBlobDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(BLOB_STORE_NAME, 'readwrite');
+        tx.objectStore(BLOB_STORE_NAME).delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    // For every message with a durable attachmentId but no live attachmentUrl
+    // yet (just restored from storage this page load), fetch its real blob
+    // and mint a fresh object URL so renderAttachmentHtml shows the actual
+    // image/audio again instead of the "not saved" marker. Failures (missing
+    // blob, IndexedDB error) are left to fall back to that marker rather than
+    // thrown -- an honest "this one's gone" beats a broken page.
+    async function hydrateAttachments(msgs) {
+      await Promise.all(msgs.filter((m) => m.attachmentId && !m.attachmentUrl).map(async (m) => {
+        try {
+          const blob = await getBlob(m.attachmentId);
+          if (blob) m.attachmentUrl = URL.createObjectURL(blob);
+        } catch { /* leave unset -- renders as the disclosed fallback marker */ }
+      }));
+    }
+
+    // Deletes any attachment blobs that belonged only to this thread. A fork
+    // shares its pre-fork messages (and their attachmentIds) with the thread
+    // it was forked from, so a blob is only actually safe to delete once no
+    // *surviving* thread's messages still reference it.
+    async function cleanupOrphanedAttachments(removedMsgs, remainingIndex) {
+      const removedIds = removedMsgs.filter((m) => m.attachmentId).map((m) => m.attachmentId);
+      if (!removedIds.length) return;
+      const stillReferenced = new Set();
+      for (const t of remainingIndex) {
+        for (const m of loadThreadMessages(t.id)) {
+          if (m.attachmentId) stillReferenced.add(m.attachmentId);
+        }
+      }
+      await Promise.all(
+        removedIds.filter((id) => !stillReferenced.has(id)).map((id) => deleteBlob(id).catch(() => {}))
+      );
+    }
+
+    function deleteThread(id) {
+      const msgs = loadThreadMessages(id);
+      localStorage.removeItem(threadKey(id));
+      const remainingIndex = loadIndex().filter((t) => t.id !== id);
+      saveIndex(remainingIndex);
+      cleanupOrphanedAttachments(msgs, remainingIndex);
+    }
 
     function withTimeout(promise, ms) {
       return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), ms))]);
@@ -394,18 +481,17 @@
     // in editMessage/regenerateFrom) -- showing the action only where it's
     // actually reachable avoids a button that looks available but silently
     // deletes a bunch of later conversation when clicked.
-    // Attachments only live in memory (attachmentUrl), never in localStorage
-    // -- persistActiveThread() strips the blob URL before saving, since
-    // localStorage is text-only and there's no IndexedDB-scale storage here
-    // for real binary data. If the blob URL is still live (this page load,
-    // not yet reloaded), show a real preview; otherwise show a plain marker
-    // so the visitor knows something was there rather than it just vanishing
-    // silently.
-    // attachmentUrl is created once, at send time (see sendText), and reused
-    // here on every re-render -- renderChat() rebuilds every row from scratch
-    // on every streamed chunk of a reply, so calling createObjectURL() fresh
-    // in here would mint a brand-new blob URL many times a second, forcing
-    // the browser to redecode the image from scratch each time and visibly
+    // The real blob is durable, stored in IndexedDB and referenced by
+    // attachmentId (see putBlob/getBlob above); attachmentUrl is just an
+    // in-memory display cache -- an object URL only ever valid for this page
+    // load, never persisted (persistActiveThread strips it). A freshly sent
+    // message gets its attachmentUrl immediately in sendText; a restored one
+    // gets it asynchronously via hydrateAttachments before its first render.
+    // attachmentUrl is only ever created ONCE per message and reused on every
+    // re-render (not regenerated here) -- renderChat() rebuilds every row
+    // from scratch on every streamed chunk of a reply, so minting a fresh
+    // blob URL in here would recreate it many times a second, forcing the
+    // browser to redecode the image from scratch each time and visibly
     // flicker/reflow while the *next* message streams in below it.
     function renderAttachmentHtml(m) {
       if (m.attachmentUrl) {
@@ -414,7 +500,7 @@
           : '<audio class="msg-attachment-audio" controls src="' + m.attachmentUrl + '"></audio>';
       }
       if (m.attachmentType) {
-        return '<div class="msg-attachment-missing">📎 ' + m.attachmentType + ' attached (not saved across reloads)</div>';
+        return '<div class="msg-attachment-missing">📎 ' + m.attachmentType + ' attached (unavailable)</div>';
       }
       return '';
     }
@@ -723,6 +809,12 @@
       stickToBottom = true;
       renderChat();
       renderThreadList();
+      // Fetching real attachment blobs from IndexedDB is async -- render the
+      // text immediately (same as everywhere else in this app) rather than
+      // blocking on it, then re-render once images/audio are ready. Guarded
+      // by activeThreadId in case the visitor's already opened a different
+      // thread by the time this resolves.
+      hydrateAttachments(messages).then(() => { if (activeThreadId === id) renderChat(); });
       closeSidebarMobile();
       if (!promptOk) return;
       chatSendBtn.disabled = true;
@@ -902,14 +994,20 @@
     // `messages` already holds whatever prefix should survive (empty for a
     // brand-new chat, or a truncated prior history for edit/regenerate).
     // `attachment` is only ever passed from sendChat -- edit/regenerate/fork
-    // resend plain text turns, since a past message's attached file (if any)
-    // was never persisted to localStorage in the first place (see
-    // renderAttachmentHtml below), so there's nothing live left to resend.
+    // resend plain text turns only, they never resend the original file as
+    // part of a *new* model turn (there's no live File left to resend, only
+    // the durable stored blob used for display) -- the earlier message and
+    // its attachment stay visible in the transcript regardless.
     async function sendText(text, attachment) {
       if ((!text && !attachment) || !promptOk) return;
       chatSendBtn.disabled = true;
       const userMsg = { role: 'user', content: text };
-      if (attachment) { userMsg.attachmentType = attachment.type; userMsg.attachmentUrl = URL.createObjectURL(attachment.file); }
+      if (attachment) {
+        userMsg.attachmentType = attachment.type;
+        userMsg.attachmentUrl = URL.createObjectURL(attachment.file);
+        try { userMsg.attachmentId = await putBlob(attachment.file); }
+        catch { /* real preview still works this session; just won't survive a reload */ }
+      }
       messages.push(userMsg);
       stickToBottom = true;
       renderChat();
