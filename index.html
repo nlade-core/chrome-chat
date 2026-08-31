@@ -426,15 +426,13 @@
 
     function deleteThread(id) {
       // If this thread has a live, still-streaming conversation, stop it
-      // first and drop its slot -- otherwise its eventual completion would
-      // call persistThread(id) again and silently resurrect the very
-      // thread just deleted.
+      // first -- otherwise its eventual completion would call
+      // persistThread(id) again and silently resurrect the very thread just
+      // deleted. Also drops it from the idle LRU cache if it happened to be
+      // sitting there warm, so a stale entry doesn't linger.
       const conv = conversations.get(id);
-      if (conv) {
-        if (conv.abortController) conv.abortController.abort();
-        if (conv.session) { try { conv.session.destroy(); } catch {} }
-        conversations.delete(id);
-      }
+      if (conv && conv.abortController) conv.abortController.abort();
+      destroyAndDropConv(id);
       const msgs = loadThreadMessages(id);
       localStorage.removeItem(threadKey(id));
       const remainingIndex = loadIndex().filter((t) => t.id !== id);
@@ -479,17 +477,55 @@
       }
       return false;
     }
-    // Called before switching the DISPLAYED thread away from prevId. An idle
-    // conversation's session is destroyed and its slot dropped (cheap to
-    // reload from storage if revisited); an actively-streaming one is
-    // deliberately left alone so it keeps generating and saves correctly
-    // once it finishes, even though it's no longer what's on screen.
+    // Reopening an idle thread means recreating its session and re-feeding
+    // its entire saved history via initialPrompts -- a real, noticeable
+    // pause that scales with how much text is in that conversation. Keeping
+    // the last few idle threads' sessions warm instead of destroying them
+    // immediately avoids paying that cost every single time someone bounces
+    // between a couple of active conversations, which is the common case.
+    // Bounded (not "keep everything forever") to avoid unboundedly
+    // accumulating live sessions over a long browsing session -- oldest
+    // cached-idle thread is evicted once the cap is exceeded. Ordered
+    // oldest-first; a thread is moved to the newest end every time it goes
+    // idle, so this reflects recency of use, not just insertion order.
+    const MAX_IDLE_CACHED = 3;
+    const idleLruIds = [];
+    function touchIdleLru(id) {
+      const idx = idleLruIds.indexOf(id);
+      if (idx !== -1) idleLruIds.splice(idx, 1);
+      idleLruIds.push(id);
+    }
+    function removeFromIdleLru(id) {
+      const idx = idleLruIds.indexOf(id);
+      if (idx !== -1) idleLruIds.splice(idx, 1);
+    }
+    function destroyAndDropConv(id) {
+      const conv = conversations.get(id);
+      if (conv) {
+        if (conv.session) { try { conv.session.destroy(); } catch {} }
+        conversations.delete(id);
+      }
+      removeFromIdleLru(id);
+    }
+
+    // Called before switching the DISPLAYED thread away from prevId. An
+    // actively-streaming conversation is left alone entirely (not cached,
+    // not destroyed) so it keeps generating and saves correctly once it
+    // finishes, even though it's no longer what's on screen. An idle one is
+    // cached in the idle LRU instead of destroyed outright -- only evicted
+    // once the cache is over MAX_IDLE_CACHED, oldest first.
     function leaveThread(prevId) {
       if (prevId == null) return;
       const conv = conversations.get(prevId);
-      if (conv && !conv.streaming) {
-        if (conv.session) { try { conv.session.destroy(); } catch {} }
-        conversations.delete(prevId);
+      if (!conv || conv.streaming) return;
+      touchIdleLru(prevId);
+      while (idleLruIds.length > MAX_IDLE_CACHED) {
+        const evictId = idleLruIds.shift();
+        const evictConv = conversations.get(evictId);
+        if (evictConv && !evictConv.streaming) {
+          if (evictConv.session) { try { evictConv.session.destroy(); } catch {} }
+          conversations.delete(evictId);
+        }
       }
     }
     let editingIndex = null; // index of the user message currently being edited inline, or null
@@ -879,12 +915,16 @@
       if (id === activeThreadId) { closeSidebarMobile(); return; }
       leaveThread(activeThreadId);
       activeThreadId = id;
+      // It's the DISPLAYED thread now, not an idle cache entry -- must never
+      // be a candidate for eviction while the visitor is actually looking at
+      // it (a later leaveThread() call re-adds it once it's actually left).
+      removeFromIdleLru(id);
       editingIndex = null;
       stickToBottom = true;
       // Reuse an already-live slot as-is (e.g. one still streaming in the
-      // background, or one just idly kept from an earlier visit this page
-      // load) rather than reloading a possibly-stale snapshot over top of
-      // its real, current in-memory state.
+      // background, or one kept warm in the idle cache from a recent visit)
+      // rather than reloading a possibly-stale snapshot over top of its
+      // real, current in-memory state.
       let conv = conversations.get(id);
       if (!conv) {
         conv = { messages: loadThreadMessages(id), session: null, streaming: false, abortController: null, forkMeta: null };
