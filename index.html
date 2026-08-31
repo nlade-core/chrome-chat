@@ -990,23 +990,46 @@
       if (abortController) abortController.abort();
     });
 
-    // Shared by a normal send, edit-and-resend, and regenerate. Assumes
+    // Given a message that's about to be dropped by a truncating slice()
+    // (edit/fork/regenerate all do this), pulls out enough to carry its
+    // attachment forward onto the replacement message sendText builds --
+    // same attachmentId/url reused (not re-stored under a new id), plus the
+    // real blob refetched from IndexedDB so the *model* actually sees the
+    // image again too, not just the redisplayed transcript. Without this,
+    // editing or regenerating a message that had an attachment would
+    // silently drop it from both the visible conversation and the model's
+    // context, and orphan its blob in IndexedDB with nothing left to
+    // reference it (confirmed as a real, reproducible bug before this fix).
+    async function carryAttachmentFrom(m) {
+      if (!m.attachmentId) return null;
+      let blob = null;
+      try { blob = await getBlob(m.attachmentId); } catch { /* falls back to a text-only resend below */ }
+      return { type: m.attachmentType, id: m.attachmentId, url: m.attachmentUrl, blob };
+    }
+
+    // Shared by a normal send, edit-and-resend, fork, and regenerate. Assumes
     // `messages` already holds whatever prefix should survive (empty for a
-    // brand-new chat, or a truncated prior history for edit/regenerate).
-    // `attachment` is only ever passed from sendChat -- edit/regenerate/fork
-    // resend plain text turns only, they never resend the original file as
-    // part of a *new* model turn (there's no live File left to resend, only
-    // the durable stored blob used for display) -- the earlier message and
-    // its attachment stay visible in the transcript regardless.
-    async function sendText(text, attachment) {
-      if ((!text && !attachment) || !promptOk) return;
+    // brand-new chat, or a truncated prior history otherwise). `attachment`
+    // is a fresh upload (mints a new stored blob + id); `carried` is an
+    // existing attachment being carried forward onto the replacement message
+    // (reuses its id/url, no duplicate blob stored) -- exactly one of the
+    // two is ever passed, never both.
+    async function sendText(text, attachment, carried) {
+      if ((!text && !attachment && !carried) || !promptOk) return;
       chatSendBtn.disabled = true;
       const userMsg = { role: 'user', content: text };
+      let modelAttachment = null; // { type, file } actually sent to the model this turn
       if (attachment) {
         userMsg.attachmentType = attachment.type;
         userMsg.attachmentUrl = URL.createObjectURL(attachment.file);
         try { userMsg.attachmentId = await putBlob(attachment.file); }
         catch { /* real preview still works this session; just won't survive a reload */ }
+        modelAttachment = attachment;
+      } else if (carried) {
+        userMsg.attachmentType = carried.type;
+        userMsg.attachmentId = carried.id;
+        userMsg.attachmentUrl = carried.url || (carried.blob && URL.createObjectURL(carried.blob));
+        if (carried.blob) modelAttachment = { type: carried.type, file: carried.blob };
       }
       messages.push(userMsg);
       stickToBottom = true;
@@ -1033,7 +1056,7 @@
         }
         const content = [];
         if (text) content.push({ type: 'text', value: text });
-        if (attachment) content.push({ type: attachment.type, value: attachment.file });
+        if (modelAttachment) content.push({ type: modelAttachment.type, value: modelAttachment.file });
         await streamReply([{ role: 'user', content }]);
       } catch (e) {
         chatNote.textContent = 'Error: ' + e.message;
@@ -1075,6 +1098,7 @@
       const text = newText.trim();
       editingIndex = null;
       if (!text) { renderChat(); return; } // an empty submit just reverts, same as Cancel
+      const carried = await carryAttachmentFrom(messages[i]);
       // Only now -- with a real, confirmed replacement text in hand -- do we
       // actually truncate and destroy the session. A live session's internal
       // context can't be rewound, so it's recreated (with whatever prefix
@@ -1082,7 +1106,7 @@
       messages = messages.slice(0, i);
       destroySession();
       stickToBottom = true;
-      await sendText(text);
+      await sendText(text, null, carried);
     }
 
     // Same truncation as confirmEdit, but the ORIGINAL thread is left
@@ -1095,6 +1119,7 @@
       editingIndex = null;
       if (!text) { renderChat(); return; }
 
+      const carried = await carryAttachmentFrom(messages[i]);
       const originalThreadId = activeThreadId;
       const originalEntry = loadIndex().find((t) => t.id === originalThreadId);
       const forkRoot = (originalEntry && originalEntry.forkRoot) || originalThreadId;
@@ -1104,7 +1129,7 @@
       activeThreadId = null;
       pendingForkMeta = { forkedFrom: originalThreadId, forkRoot };
       stickToBottom = true;
-      await sendText(text);
+      await sendText(text, null, carried);
     }
 
     async function regenerateFrom(assistantIndex) {
@@ -1112,15 +1137,19 @@
       const lastUserIndex = assistantIndex - 1;
       if (lastUserIndex < 0 || messages[lastUserIndex].role !== 'user') return;
       const textToResend = messages[lastUserIndex].content;
+      const carried = await carryAttachmentFrom(messages[lastUserIndex]);
       // Same truncate-and-destroy path as editMessage, then immediately
       // resend the REAL prior text (not a filler string -- a real bug caught
-      // in this exact spot during planning) so the visible transcript and
+      // in this exact spot during planning) plus its real attachment, if any
+      // (a second real bug, caught by review after attachments shipped: this
+      // used to resend text-only, silently dropping the image from both the
+      // transcript and the model's context) so the visible transcript and
       // the model's actual context never diverge.
       messages = messages.slice(0, lastUserIndex);
       destroySession();
       stickToBottom = true;
       renderChat();
-      await sendText(textToResend);
+      await sendText(textToResend, null, carried);
     }
 
     chatSendBtn.addEventListener('click', sendChat);
