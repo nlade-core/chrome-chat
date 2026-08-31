@@ -964,6 +964,47 @@
       return t.length > 40 ? t.slice(0, 40) + '…' : t;
     }
 
+    const TITLE_SYSTEM_PROMPT = 'You write extremely short conversation titles. Given the user\'s message, reply with ONLY a title of 3-6 words -- no quotes, no trailing punctuation, no explanation, nothing else.';
+    // A real, separate model call -- not the truncated first-N-characters
+    // titleFrom() gives you. Uses its own throwaway session (distinct system
+    // prompt, destroyed right after) rather than the real conversational
+    // session, so it never pollutes that session's actual context.
+    async function generateTitle(text) {
+      const session = await LanguageModel.create({ initialPrompts: [{ role: 'system', content: TITLE_SYSTEM_PROMPT }] });
+      try {
+        const raw = await session.prompt(text);
+        const cleaned = raw.trim().replace(/^["'“”]+|["'“”]+$/g, '').replace(/[.!?]+$/, '').trim();
+        return cleaned || titleFrom(text);
+      } finally {
+        try { session.destroy(); } catch {}
+      }
+    }
+    // Fire-and-forget: replaces a thread's fallback (truncated) title with a
+    // real generated one once ready. Deliberately never awaited by its
+    // caller -- the reply the visitor is actually looking at must never
+    // wait on this. Only ever called for a thread's first exchange, and
+    // sequenced strictly AFTER that reply already finished (see
+    // streamReply) -- Gemini Nano is one shared on-device resource, so
+    // running this concurrently with the actual reply would just make both
+    // slower for no benefit the visitor asked for; running it after means
+    // it can only ever compete with something ELSE sent afterward, not with
+    // the reply someone is actually staring at.
+    async function maybeGenerateTitle(threadId, firstUserText) {
+      if (!firstUserText) return; // e.g. an image-only first message with no text -- keep the fallback title
+      let title;
+      try {
+        title = await generateTitle(firstUserText);
+      } catch {
+        return; // model call failed -- keep whatever fallback title is already saved
+      }
+      const idx = loadIndex();
+      const entry = idx.find((t) => t.id === threadId);
+      if (!entry) return; // thread deleted while this was generating
+      entry.title = title;
+      saveIndex(idx);
+      renderThreadList();
+    }
+
     function closeSidebarMobile() {
       sidebar.classList.remove('open');
       sidebarOverlay.classList.remove('visible');
@@ -1227,6 +1268,12 @@
         warnIfNearLimit();
       }
       persistThread(threadId); // always -- this reply belongs to threadId regardless of what's currently displayed
+      // First exchange only -- request a real generated title now that the
+      // reply itself is fully done and displayed. Not awaited: this must
+      // never delay anything the visitor is actually looking at.
+      if (conv.messages.length === 2) {
+        maybeGenerateTitle(threadId, conv.messages[0].content);
+      }
     }
 
     chatStopBtn.addEventListener('click', () => {
