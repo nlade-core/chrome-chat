@@ -197,13 +197,33 @@
     border-radius: 1.5rem;
     box-shadow: 0 2px 6px rgba(0,0,0,.06);
     background: var(--bg);
-    padding: 0.75rem 3rem 0.75rem 1rem;
+    padding: 0.75rem 3rem 0.75rem 2.75rem;
   }
   .composer-box textarea {
     width: 100%; border: none; resize: none; background: transparent; color: var(--fg);
     max-height: 200px; overflow-y: auto; line-height: 1.4;
   }
   .composer-box textarea:focus { outline: none; }
+  .attach-btn {
+    position: absolute; left: 0.5rem; bottom: 0.5rem;
+    width: 2rem; height: 2rem; border-radius: 50%;
+    background: transparent; color: var(--muted); border: none; font-size: 1rem;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .attach-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .attachment-chip {
+    display: flex; align-items: center; gap: 0.5rem;
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+    border: 1px solid var(--border); border-radius: 0.75rem;
+    padding: 0.4rem 0.7rem; margin-bottom: 0.5rem; font-size: 0.82rem; color: var(--fg);
+  }
+  .attachment-chip span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attachment-chip button {
+    background: transparent; border: none; color: var(--muted); font-size: 0.95rem; padding: 0 0.2rem;
+  }
+  .msg-attachment-img { max-width: 100%; max-height: 220px; border-radius: 0.75rem; margin-bottom: 0.5rem; }
+  .msg-attachment-audio { width: 100%; margin-bottom: 0.5rem; }
+  .msg-attachment-missing { color: var(--muted); font-size: 0.8rem; font-style: italic; margin-bottom: 0.4rem; }
   .send-btn {
     position: absolute; right: 0.5rem; bottom: 0.5rem;
     width: 2rem; height: 2rem; border-radius: 50%;
@@ -258,7 +278,13 @@
       <button id="scroll-bottom-btn" style="display:none;" aria-label="Scroll to bottom">↓</button>
       <div id="composer">
         <div class="composer-shell">
+          <div class="attachment-chip" id="attachment-chip" style="display:none;">
+            <span id="attachment-name"></span>
+            <button id="remove-attachment-btn" aria-label="Remove attachment">×</button>
+          </div>
           <div class="composer-box">
+            <button class="attach-btn" id="attach-btn" type="button" aria-label="Attach an image or audio clip">📎</button>
+            <input type="file" id="attach-input" accept="image/*,audio/*" style="display:none;">
             <textarea id="chat-input" placeholder="Message chrome-chat…" rows="1"></textarea>
             <button class="send-btn" id="chat-send-btn" disabled aria-label="Send">➤</button>
             <button class="send-btn stop-btn" id="chat-stop-btn" style="display:none;" aria-label="Stop generating">■</button>
@@ -282,6 +308,11 @@
     const chatInput = document.getElementById('chat-input');
     const chatSendBtn = document.getElementById('chat-send-btn');
     const chatStopBtn = document.getElementById('chat-stop-btn');
+    const attachBtn = document.getElementById('attach-btn');
+    const attachInput = document.getElementById('attach-input');
+    const attachmentChip = document.getElementById('attachment-chip');
+    const attachmentNameEl = document.getElementById('attachment-name');
+    const removeAttachmentBtn = document.getElementById('remove-attachment-btn');
     const chatNote = document.getElementById('chat-note');
     const hamburgerBtn = document.getElementById('hamburger-btn');
     const sidebar = document.getElementById('sidebar');
@@ -314,6 +345,7 @@
     let pendingDeleteTimer = null;
     let searchQuery = '';
     let expandedFamilyRoot = null; // root id of the currently-expanded fork family in the sidebar, or null
+    let pendingAttachment = null; // { file: File, type: 'image'|'audio' } queued for the next send, or null
 
     async function checkCapability() {
       if (!self.LanguageModel) {
@@ -348,6 +380,26 @@
     // in editMessage/regenerateFrom) -- showing the action only where it's
     // actually reachable avoids a button that looks available but silently
     // deletes a bunch of later conversation when clicked.
+    // Attachments only live in memory (attachmentFile), never in localStorage
+    // -- persistActiveThread() strips the File object before saving, since
+    // localStorage is text-only and there's no IndexedDB-scale storage here
+    // for real binary data. If the file is still in memory (this page load,
+    // not yet reloaded), show a real preview; otherwise show a plain marker
+    // so the visitor knows something was there rather than it just vanishing
+    // silently.
+    function renderAttachmentHtml(m) {
+      if (m.attachmentFile) {
+        const url = URL.createObjectURL(m.attachmentFile);
+        return m.attachmentType === 'image'
+          ? '<img class="msg-attachment-img" src="' + url + '" alt="Attached image">'
+          : '<audio class="msg-attachment-audio" controls src="' + url + '"></audio>';
+      }
+      if (m.attachmentType) {
+        return '<div class="msg-attachment-missing">📎 ' + m.attachmentType + ' attached (not saved across reloads)</div>';
+      }
+      return '';
+    }
+
     function renderChat() {
       const hasMessages = messages.length > 0;
       emptyStateEl.style.display = hasMessages ? 'none' : 'flex';
@@ -383,7 +435,7 @@
             // against a surprise when actually confirming one.
             const editBtn = (!streaming && editingIndex === null)
               ? '<div class="msg-actions"><button class="icon-btn edit-btn" data-i="' + i + '">Edit</button></div>' : '';
-            row.innerHTML = '<div class="content"><div class="user-wrap"><div class="bubble">' + renderMarkdown(m.content) + '</div>' + editBtn + '</div></div>';
+            row.innerHTML = '<div class="content"><div class="user-wrap"><div class="bubble">' + renderAttachmentHtml(m) + renderMarkdown(m.content) + '</div>' + editBtn + '</div></div>';
           }
         } else {
           const isLastAndStreaming = streaming && i === lastIndex;
@@ -603,7 +655,17 @@
       }
       updated.push(entry);
       saveIndex(updated);
-      saveThreadMessages(activeThreadId, messages);
+      // Strip the live File reference before persisting -- localStorage is
+      // text-only, and a File wouldn't survive JSON.stringify cleanly anyway
+      // (it'd serialize as an empty object rather than throw). The in-memory
+      // `messages` array keeps the real attachmentFile for as long as this
+      // page stays loaded; only the saved copy drops it.
+      const storableMessages = messages.map((m) => {
+        if (!m.attachmentFile) return m;
+        const { attachmentFile, ...rest } = m;
+        return rest;
+      });
+      saveThreadMessages(activeThreadId, storableMessages);
       renderThreadList();
     }
 
@@ -647,6 +709,7 @@
       try {
         session = await LanguageModel.create({
           initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages.map((m) => ({ role: m.role, content: m.content }))],
+          expectedInputs: [{ type: 'text' }, { type: 'image' }, { type: 'audio' }],
         });
         chatNote.textContent = '';
         warnIfNearLimit();
@@ -757,6 +820,26 @@
     }
     chatInput.addEventListener('input', autoResize);
 
+    attachBtn.addEventListener('click', () => attachInput.click());
+    attachInput.addEventListener('change', () => {
+      const file = attachInput.files[0];
+      if (!file) return;
+      const type = file.type.startsWith('image/') ? 'image' : file.type.startsWith('audio/') ? 'audio' : null;
+      if (!type) {
+        chatNote.textContent = 'Only image or audio files can be attached.';
+        attachInput.value = '';
+        return;
+      }
+      pendingAttachment = { file, type };
+      attachmentNameEl.textContent = file.name;
+      attachmentChip.style.display = 'flex';
+    });
+    removeAttachmentBtn.addEventListener('click', () => {
+      pendingAttachment = null;
+      attachInput.value = '';
+      attachmentChip.style.display = 'none';
+    });
+
     let abortController = null;
 
     // Shared by a fresh send and (later) regenerate -- takes the exact turn
@@ -797,10 +880,16 @@
     // Shared by a normal send, edit-and-resend, and regenerate. Assumes
     // `messages` already holds whatever prefix should survive (empty for a
     // brand-new chat, or a truncated prior history for edit/regenerate).
-    async function sendText(text) {
-      if (!text || !promptOk) return;
+    // `attachment` is only ever passed from sendChat -- edit/regenerate/fork
+    // resend plain text turns, since a past message's attached file (if any)
+    // was never persisted to localStorage in the first place (see
+    // renderAttachmentHtml below), so there's nothing live left to resend.
+    async function sendText(text, attachment) {
+      if ((!text && !attachment) || !promptOk) return;
       chatSendBtn.disabled = true;
-      messages.push({ role: 'user', content: text });
+      const userMsg = { role: 'user', content: text };
+      if (attachment) { userMsg.attachmentType = attachment.type; userMsg.attachmentFile = attachment.file; }
+      messages.push(userMsg);
       stickToBottom = true;
       renderChat();
       chatNote.textContent = 'Generating…';
@@ -815,6 +904,7 @@
           // silently forget context that should still be there.
           session = await LanguageModel.create({
             initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }, ...messages.slice(0, -1).map((m) => ({ role: m.role, content: m.content }))],
+            expectedInputs: [{ type: 'text' }, { type: 'image' }, { type: 'audio' }],
             monitor(m) {
               m.addEventListener('downloadprogress', (e) => {
                 chatNote.textContent = 'Downloading model… ' + Math.round(e.loaded * 100) + '%';
@@ -822,7 +912,10 @@
             },
           });
         }
-        await streamReply([{ role: 'user', content: [{ type: 'text', value: text }] }]);
+        const content = [];
+        if (text) content.push({ type: 'text', value: text });
+        if (attachment) content.push({ type: attachment.type, value: attachment.file });
+        await streamReply([{ role: 'user', content }]);
       } catch (e) {
         chatNote.textContent = 'Error: ' + e.message;
       }
@@ -831,10 +924,14 @@
 
     async function sendChat() {
       const text = chatInput.value.trim();
-      if (!text || !promptOk) return;
+      const attachment = pendingAttachment;
+      if ((!text && !attachment) || !promptOk) return;
       chatInput.value = '';
       autoResize();
-      await sendText(text);
+      pendingAttachment = null;
+      attachInput.value = '';
+      attachmentChip.style.display = 'none';
+      await sendText(text, attachment);
     }
 
     // Entering edit mode touches nothing but `editingIndex` -- messages,
