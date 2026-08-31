@@ -73,6 +73,19 @@ End to end with Playwright, stubbing `window.LanguageModel` (this is an ordinary
 
 **Not yet verified:** real Gemini Nano answer quality, real streaming latency, real `contextWindow`/`contextUsage` figures, and real multimodal understanding (does it actually describe an attached image sensibly) — all need testing in actual Chrome, not a stub.
 
+## Roadmap
+
+**Recently shipped, in order:** conversation forking → multimodal input → durable IndexedDB attachment storage → a real per-thread data-loss/corruption fix for switching threads mid-reply → an idle-session LRU cache → a centered landing composer → landing-screen session pre-warming → generated conversation titles.
+
+**Next candidates, roughly in priority order:**
+
+1. **Silent title re-titling.** Generated titles (above) only ever run once, from the first exchange. A second, later pass — refining the title once the conversation has developed further, the way more mature chat products do — was deliberately deferred to design together with the item below.
+2. **Title-gen visibility in the queued indicator.** A real, confirmed gap: a fast follow-up sent while a title-generation call is still resolving elsewhere isn't reflected in the existing "queued behind another reply" note, since title-gen sessions aren't tracked in the same place conversation sessions are. Small fix, bundled with #1 since both touch the same code path.
+3. **Conversation export.** Not designed yet.
+4. **Theme toggle.** Not designed yet.
+5. **Cross-tab write-locking.** Two tabs open on the same saved conversation can silently overwrite each other's save (a `navigator.locks`-based fix is designed, just not built — see project notes). Low priority for a single-user tool; revisit if it's ever actually hit in practice.
+6. **The original "differentiated" tier, unstarted:** a live zero-network-requests indicator, Pyodide-based tool use, a thinking-mode toggle. All just named candidates so far, none designed.
+
 ## License
 
 MIT
