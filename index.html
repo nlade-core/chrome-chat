@@ -466,6 +466,19 @@
     const EMPTY_CONV = { messages: [], session: null, streaming: false, abortController: null };
     let activeThreadId = null; // which conversation is CURRENTLY DISPLAYED; null = a blank, not-yet-sent new chat
     function activeConv() { return conversations.get(activeThreadId) || EMPTY_CONV; }
+    // Gemini Nano is one shared on-device model per machine -- separate
+    // session objects don't mean separate compute, so a second conversation
+    // generating while another already is will likely just wait its turn
+    // rather than truly run in parallel. This can't speed that up (it's a
+    // platform constraint, not something this app controls), but it's used
+    // to make the wait honest instead of looking indistinguishable from
+    // being stuck.
+    function anyOtherConvStreaming(exceptId) {
+      for (const [id, c] of conversations) {
+        if (id !== exceptId && c.streaming) return true;
+      }
+      return false;
+    }
     // Called before switching the DISPLAYED thread away from prevId. An idle
     // conversation's session is destroyed and its slot dropped (cheap to
     // reload from storage if revisited); an actively-streaming one is
@@ -598,7 +611,9 @@
           const timingHtml = m.timingMs
             ? '<div class="msg-timing">' +
                 (m.timingMs.firstChunk != null ? formatDuration(m.timingMs.firstChunk) + ' to first token · ' : '') +
-                formatDuration(m.timingMs.total) + ' total</div>'
+                formatDuration(m.timingMs.total) + ' total' +
+                (m.timingMs.wasQueued ? ' (queued behind another reply)' : '') +
+              '</div>'
             : '';
           row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + timingHtml + actions + '</div>';
         }
@@ -1044,9 +1059,11 @@
       conv.messages.push(assistantMsg);
       conv.streaming = true;
       conv.abortController = new AbortController();
+      const wasQueued = anyOtherConvStreaming(threadId);
       if (isShown()) {
         chatSendBtn.style.display = 'none';
         chatStopBtn.style.display = 'flex';
+        if (wasQueued) chatNote.textContent = 'Waiting on another reply to finish generating first…';
         renderChat();
       }
       renderThreadList(); // reflects the new "generating" indicator even if this thread isn't displayed
@@ -1055,7 +1072,12 @@
       try {
         const stream = conv.session.promptStreaming(turnInput, { signal: conv.abortController.signal });
         for await (const chunk of stream) {
-          if (firstChunkAt === null) firstChunkAt = performance.now();
+          if (firstChunkAt === null) {
+            firstChunkAt = performance.now();
+            // Real progress has actually started -- clear a stale "waiting"
+            // note now rather than leaving it up for the rest of the reply.
+            if (wasQueued && isShown()) chatNote.textContent = '';
+          }
           assistantMsg.content += chunk;
           if (isShown()) renderChat();
         }
@@ -1071,6 +1093,7 @@
       assistantMsg.timingMs = {
         total: Math.round(performance.now() - startedAt),
         firstChunk: firstChunkAt === null ? null : Math.round(firstChunkAt - startedAt),
+        wasQueued, // true if another conversation was already generating when this one started
       };
       if (isShown()) {
         chatSendBtn.style.display = 'flex';
