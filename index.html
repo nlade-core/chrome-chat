@@ -551,6 +551,7 @@
     let expandedFamilyRoot = null; // root id of the currently-expanded fork family in the sidebar, or null
     let pendingAttachment = null; // { file: File, type: 'image'|'audio' } queued for the next send, or null
 
+    let modelAvailability = null; // the raw availability() string, kept around so prewarming/landing messaging can reuse it instead of re-querying
     async function checkCapability() {
       if (!self.LanguageModel) {
         statusPill.className = 'status-pill missing';
@@ -559,6 +560,7 @@
       }
       try {
         const availability = await withTimeout(LanguageModel.availability(), 5000);
+        modelAvailability = availability;
         promptOk = availability !== 'unavailable';
         statusPill.className = 'status-pill ' + (availability === 'available' ? 'available' : availability === 'unavailable' ? 'unavailable' : 'downloadable');
         statusPill.textContent = availability === 'downloadable' ? 'needs download' : availability;
@@ -568,8 +570,53 @@
       }
       if (promptOk) chatSendBtn.disabled = false;
       else chatNote.textContent = 'The Prompt API isn\'t available in this browser right now.';
+      maybePrewarmSession();
     }
     checkCapability();
+
+    // Pre-warming: a brand-new chat's landing screen is genuine dead time --
+    // nothing else is happening while the visitor reads/types -- so if the
+    // model is already known to be available (no download needed), start
+    // creating its session right then instead of waiting until they hit
+    // send. Deliberately does NOT do this when a download would be needed:
+    // that would silently start a real, possibly large download before the
+    // visitor has done anything to ask for it, which is exactly the kind of
+    // surprise this app is built to avoid (see the landing-screen warning
+    // this pairs with, in checkLandingDownloadNotice).
+    let prewarm = null; // { promise: Promise<{session, createMs}> } | null -- unclaimed, for whatever the NEXT brand-new chat turns out to be
+    function maybePrewarmSession() {
+      if (activeThreadId !== null || prewarm) return;
+      checkLandingDownloadNotice();
+      if (modelAvailability !== 'available') return;
+      const startedAt = performance.now();
+      const promise = LanguageModel.create({
+        initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }],
+        expectedInputs: [{ type: 'text' }, { type: 'image' }, { type: 'audio' }],
+      }).then((session) => ({ session, createMs: Math.round(performance.now() - startedAt) }));
+      prewarm = { promise };
+      promise.catch(() => { prewarm = null; }); // failed -- sendText's own fallback path will just create fresh at send time
+    }
+    // A pre-warmed session belongs to whichever brand-new chat gets sent
+    // next -- if the visitor instead opens a real, different thread, it's
+    // no longer useful and would just sit there unreferenced. Destroyed
+    // rather than left to leak.
+    function discardPrewarmIfAny() {
+      if (!prewarm) return;
+      const claimed = prewarm;
+      prewarm = null;
+      claimed.promise.then(({ session }) => { try { session.destroy(); } catch {} }).catch(() => {});
+    }
+    // Honest, upfront warning on the landing screen itself when the model
+    // would need a real download -- discovered only after clicking send
+    // otherwise. Only touches the note while genuinely still landing (blank,
+    // nothing sent yet); a later real send/thread-open overwrites chatNote
+    // with its own more specific text regardless.
+    function checkLandingDownloadNotice() {
+      if (activeThreadId !== null) return;
+      if (modelAvailability && modelAvailability !== 'available' && modelAvailability !== 'unavailable') {
+        chatNote.textContent = 'The on-device model needs to download before first use — sending a message will start that, which may take a while.';
+      }
+    }
 
     function escapeHtml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
     function renderMarkdown(text) { return '<div class="md">' + marked.parse(escapeHtml(text)) + '</div>'; }
@@ -663,11 +710,17 @@
             }
             actions += '</div>';
           }
+          const sessionPart = m.timingMs && m.timingMs.session
+            ? (m.timingMs.session.prewarmed
+                ? ' · session was ready (warmed in background, ' + formatDuration(m.timingMs.session.createMs) + ')'
+                : ' · ' + formatDuration(m.timingMs.session.createMs) + ' to start session')
+            : '';
           const timingHtml = m.timingMs
             ? '<div class="msg-timing">' +
                 (m.timingMs.firstChunk != null ? formatDuration(m.timingMs.firstChunk) + ' to first token · ' : '') +
                 formatDuration(m.timingMs.total) + ' total' +
                 (m.timingMs.wasQueued ? ' (queued behind another reply)' : '') +
+                sessionPart +
               '</div>'
             : '';
           row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + timingHtml + actions + '</div>';
@@ -929,11 +982,13 @@
       chatNote.textContent = '';
       chatNote.classList.remove('warn');
       closeSidebarMobile();
+      maybePrewarmSession(); // no-ops if one's already pending/warmed, or if a download would be needed
     }
 
     async function openThread(id) {
       if (id === activeThreadId) { closeSidebarMobile(); return; }
       leaveThread(activeThreadId);
+      discardPrewarmIfAny(); // opening a real thread -- any pending "next new chat" prewarm is now moot
       activeThreadId = id;
       // It's the DISPLAYED thread now, not an idle cache entry -- must never
       // be a candidate for eviction while the visitor is actually looking at
@@ -1121,7 +1176,7 @@
     // so a reply that's still generating after the visitor switches away
     // completes correctly and saves to the right place instead of getting
     // lost or attributed to whatever's since become active.
-    async function streamReply(threadId, turnInput) {
+    async function streamReply(threadId, turnInput, sessionTiming) {
       const conv = conversations.get(threadId);
       const isShown = () => activeThreadId === threadId;
       const assistantMsg = { role: 'assistant', content: '' };
@@ -1163,6 +1218,7 @@
         total: Math.round(performance.now() - startedAt),
         firstChunk: firstChunkAt === null ? null : Math.round(firstChunkAt - startedAt),
         wasQueued, // true if another conversation was already generating when this one started
+        session: sessionTiming || null, // set only on the message whose turn actually created/adopted the session
       };
       if (isShown()) {
         chatSendBtn.style.display = 'flex';
@@ -1211,11 +1267,18 @@
     async function sendText(text, attachment, carried, targetThreadId) {
       if ((!text && !attachment && !carried) || !promptOk) return;
       let threadId = targetThreadId;
+      let claimedPrewarm = null;
       if (threadId == null) {
         if (activeThreadId === null) {
           threadId = crypto.randomUUID();
           activeThreadId = threadId;
           conversations.set(threadId, { messages: [], session: null, streaming: false, abortController: null, forkMeta: null });
+          // If the landing screen already started warming a session for
+          // "whatever comes next", this new thread is that -- claim it now
+          // (synchronously, before any await) so no other code path can
+          // also claim the same one.
+          claimedPrewarm = prewarm;
+          prewarm = null;
         } else {
           threadId = activeThreadId;
         }
@@ -1245,9 +1308,18 @@
       persistThread(threadId);
       if (isShown()) { stickToBottom = true; renderChat(); chatNote.textContent = 'Generating…'; }
 
+      let sessionTiming = null; // only set if THIS call actually created/adopted the session -- not on a continuing turn that reuses an existing one
       try {
+        if (!conv.session && claimedPrewarm) {
+          try {
+            const { session, createMs } = await claimedPrewarm.promise;
+            conv.session = session;
+            sessionTiming = { createMs, prewarmed: true };
+          } catch { /* prewarm failed -- falls through to the normal path below */ }
+        }
         if (!conv.session) {
           if (isShown()) chatNote.textContent = 'Starting session (may download the model on first use)…';
+          const sessionStartedAt = performance.now();
           // conv.messages already includes the turn just pushed above -- seed
           // initialPrompts with everything BEFORE it. For a genuinely new
           // chat that's empty; after an edit/regenerate truncation it's the
@@ -1262,11 +1334,12 @@
               });
             },
           });
+          sessionTiming = { createMs: Math.round(performance.now() - sessionStartedAt), prewarmed: false };
         }
         const content = [];
         if (text) content.push({ type: 'text', value: text });
         if (modelAttachment) content.push({ type: modelAttachment.type, value: modelAttachment.file });
-        await streamReply(threadId, [{ role: 'user', content }]);
+        await streamReply(threadId, [{ role: 'user', content }], sessionTiming);
       } catch (e) {
         if (isShown()) chatNote.textContent = 'Error: ' + e.message;
       }
