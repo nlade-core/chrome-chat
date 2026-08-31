@@ -178,6 +178,7 @@
   .md pre { background: color-mix(in srgb, var(--fg) 8%, transparent); border-radius: 6px; padding: 0.75rem; overflow-x: auto; margin: 0.6rem 0; }
   .md pre code { background: none; padding: 0; }
 
+  .msg-timing { color: var(--muted); font-size: 0.7rem; margin-top: 0.4rem; }
   .msg-actions { margin-top: 0.5rem; display: flex; gap: 0.4rem; }
   .msg-actions .icon-btn {
     background: transparent;
@@ -470,6 +471,7 @@
 
     function escapeHtml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
     function renderMarkdown(text) { return '<div class="md">' + marked.parse(escapeHtml(text)) + '</div>'; }
+    function formatDuration(ms) { return (ms / 1000).toFixed(1) + 's'; }
 
     let stickToBottom = true;
 
@@ -552,7 +554,12 @@
             }
             actions += '</div>';
           }
-          row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + actions + '</div>';
+          const timingHtml = m.timingMs
+            ? '<div class="msg-timing">' +
+                (m.timingMs.firstChunk != null ? formatDuration(m.timingMs.firstChunk) + ' to first token · ' : '') +
+                formatDuration(m.timingMs.total) + ' total</div>'
+            : '';
+          row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + timingHtml + actions + '</div>';
         }
         chatLog.appendChild(row);
       });
@@ -766,10 +773,12 @@
       // dead reference producing a broken image rather than the honest
       // "not saved across reloads" marker. The in-memory `messages` array
       // keeps the real attachmentUrl for as long as this page stays loaded;
-      // only the saved copy drops it.
+      // only the saved copy drops it. timingMs is dropped too -- it's a
+      // quick diagnostic for this page load only, not meant to be a
+      // permanent saved record.
       const storableMessages = messages.map((m) => {
-        if (!m.attachmentUrl) return m;
-        const { attachmentUrl, ...rest } = m;
+        if (!m.attachmentUrl && !m.timingMs) return m;
+        const { attachmentUrl, timingMs, ...rest } = m;
         return rest;
       });
       saveThreadMessages(activeThreadId, storableMessages);
@@ -967,9 +976,12 @@
       chatSendBtn.style.display = 'none';
       chatStopBtn.style.display = 'flex';
       renderChat();
+      const startedAt = performance.now();
+      let firstChunkAt = null;
       try {
         const stream = session.promptStreaming(turnInput, { signal: abortController.signal });
         for await (const chunk of stream) {
+          if (firstChunkAt === null) firstChunkAt = performance.now();
           assistantMsg.content += chunk;
           renderChat();
         }
@@ -981,7 +993,14 @@
       abortController = null;
       chatSendBtn.style.display = 'flex';
       chatStopBtn.style.display = 'none';
-      renderChat(); // re-render once more so the finished (or stopped) reply gets its Copy button
+      // Quick, in-memory-only answer to "how long does this actually take" --
+      // never persisted (see persistActiveThread), easy to pull out later if
+      // it's not worth keeping around.
+      assistantMsg.timingMs = {
+        total: Math.round(performance.now() - startedAt),
+        firstChunk: firstChunkAt === null ? null : Math.round(firstChunkAt - startedAt),
+      };
+      renderChat(); // re-render once more so the finished (or stopped) reply gets its Copy button + timing
       warnIfNearLimit();
       persistActiveThread();
     }
