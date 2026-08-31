@@ -913,6 +913,15 @@
         conv.session = await LanguageModel.create({
           initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }, ...conv.messages.map((m) => ({ role: m.role, content: m.content }))],
           expectedInputs: [{ type: 'text' }, { type: 'image' }, { type: 'audio' }],
+          // Same download-progress feedback sendText's session creation
+          // already has -- without this, reopening a saved thread on a
+          // device that hasn't downloaded the model yet just sat there
+          // silently with no percentage, unlike sending a fresh message.
+          monitor(m) {
+            m.addEventListener('downloadprogress', (e) => {
+              if (activeThreadId === id) chatNote.textContent = 'Downloading model… ' + Math.round(e.loaded * 100) + '%';
+            });
+          },
         });
         if (activeThreadId === id) { chatNote.textContent = ''; warnIfNearLimit(); }
       } catch (e) {
