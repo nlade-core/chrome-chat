@@ -25,6 +25,8 @@ Built directly on two pages from [`pages-lab-ai`](https://github.com/nlade-core/
 - **Multimodal input**: attach an image or audio clip alongside your message. The attachment persists across reloads and browser restarts, same as everything else — the real image/audio renders again the next time you open that conversation, not just a memory of it having existed.
 - **Response timing**: each finished reply shows how long it actually took — time to first token and total duration — a quick, honest answer to "is this slow, does an image slow it down," measured live rather than assumed. In-memory only, not saved across a reload.
 - **Safe background generation**: switching to a different conversation — or starting a new chat — while a reply is still streaming no longer loses or corrupts anything. The reply keeps generating and saves correctly to the conversation it actually belongs to; a small dot in the sidebar shows which thread is still working while you're looking at something else. Gemini Nano is one shared on-device model, so a second reply generating at the same time as another will likely wait its turn rather than truly run in parallel — an honest "Waiting on another reply…" note shows while that's happening, instead of silently looking stuck.
+- **Manual Summarize and Condense**: Summarize reads the whole conversation and refreshes its title plus a stored summary, without touching the live session. Condense goes further — summarizes the conversation, then restarts the model fresh from just that summary, so a long thread can keep going instead of hitting its context limit and being abandoned. The full transcript stays visible either way; nothing you said or received is ever hidden. A proposed new title after condensing is always asked for, never applied silently.
+- **Context-usage meter**: a small color-coded bar and percentage in the header show how much of the model's context window the current conversation has actually used, not just a warning after the fact.
 
 ## Requirements
 
@@ -70,21 +72,21 @@ End to end with Playwright, stubbing `window.LanguageModel` (this is an ordinary
 - The centered landing layout appears on every fresh blank chat (including right after a page load, confirmed by bounding-box position) and switches to the normal docked layout the instant the first message is sent; opening any saved, non-empty thread never shows it.
 - The landing-screen prewarm fires only when the model is confirmed available (never when a download would be needed — the warning shows instead) and is genuinely adopted by the first message sent, not duplicated (confirmed via `create()` call counts staying at one); opening a different, real existing thread while a prewarm is still unclaimed destroys it rather than leaking it.
 - Generated titles use their own separate, throwaway session (confirmed via distinct `create()` calls) rather than the real conversational one, fire only once per conversation, and — measured directly, not assumed — never delay the reply they follow: a reply's own completion time is identical whether or not a slow title-generation call is running alongside it. One known gap, found while verifying this and not yet addressed: a fast follow-up sent while a title-gen call is still in flight elsewhere isn't currently reflected in the "queued behind another reply" indicator, since title-gen sessions aren't tracked the same way conversation sessions are.
+- The context meter shows the real percentage and correct color band, and is hidden until a real session exists. Condensing a conversation inserts a visible divider while leaving every original message untouched, destroys the old session, and — confirmed by inspecting the actual argument passed to the next `create()` call, not just the UI — the next session's context contains only the summary plus anything sent afterward, never the pre-condensation messages verbatim. The retitle banner proposes the right title, Accept applies it, Keep current discards it; a malformed response from the summarization call is handled gracefully with no broken divider inserted.
 
 **Not yet verified:** real Gemini Nano answer quality, real streaming latency, real `contextWindow`/`contextUsage` figures, and real multimodal understanding (does it actually describe an attached image sensibly) — all need testing in actual Chrome, not a stub.
 
 ## Roadmap
 
-**Recently shipped, in order:** conversation forking → multimodal input → durable IndexedDB attachment storage → a real per-thread data-loss/corruption fix for switching threads mid-reply → an idle-session LRU cache → a centered landing composer → landing-screen session pre-warming → generated conversation titles.
+**Recently shipped, in order:** conversation forking → multimodal input → durable IndexedDB attachment storage → a real per-thread data-loss/corruption fix for switching threads mid-reply → an idle-session LRU cache → a centered landing composer → landing-screen session pre-warming → generated conversation titles → manual Summarize/Condense + a context-usage meter.
 
 **Next candidates, roughly in priority order:**
 
-1. **Silent title re-titling.** Generated titles (above) only ever run once, from the first exchange. A second, later pass — refining the title once the conversation has developed further, the way more mature chat products do — was deliberately deferred to design together with the item below.
-2. **Title-gen visibility in the queued indicator.** A real, confirmed gap: a fast follow-up sent while a title-generation call is still resolving elsewhere isn't reflected in the existing "queued behind another reply" note, since title-gen sessions aren't tracked in the same place conversation sessions are. Small fix, bundled with #1 since both touch the same code path.
-3. **Conversation export.** Not designed yet.
-4. **Theme toggle.** Not designed yet.
-5. **Cross-tab write-locking.** Two tabs open on the same saved conversation can silently overwrite each other's save (a `navigator.locks`-based fix is designed, just not built — see project notes). Low priority for a single-user tool; revisit if it's ever actually hit in practice.
-6. **The original "differentiated" tier, unstarted:** a live zero-network-requests indicator, Pyodide-based tool use, a thinking-mode toggle. All just named candidates so far, none designed.
+1. **Title-gen visibility in the queued indicator.** A real, confirmed gap: a fast follow-up sent while a title/summary-generation call is still resolving elsewhere isn't reflected in the existing "queued behind another reply" note, since these throwaway sessions aren't tracked in the same place conversation sessions are.
+2. **Conversation export.** Not designed yet.
+3. **Theme toggle.** Not designed yet.
+4. **Cross-tab write-locking.** Two tabs open on the same saved conversation can silently overwrite each other's save (a `navigator.locks`-based fix is designed, just not built — see project notes). Low priority for a single-user tool; revisit if it's ever actually hit in practice.
+5. **The original "differentiated" tier, unstarted:** a live zero-network-requests indicator, Pyodide-based tool use, a thinking-mode toggle. All just named candidates so far, none designed.
 
 ## License
 
