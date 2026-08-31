@@ -131,13 +131,25 @@
     border-bottom: 1px solid var(--border);
     font-size: 0.85rem;
   }
-  #summarize-btn {
-    margin-left: auto;
+  #context-meter { display: flex; align-items: center; gap: 0.35rem; flex-shrink: 0; }
+  #context-meter-bar { width: 3.5rem; height: 0.35rem; border-radius: 999px; background: var(--border); overflow: hidden; }
+  #context-meter-fill { height: 100%; width: 0%; background: var(--ok); transition: width 0.2s; }
+  #context-meter-fill.warn { background: var(--warn); }
+  #context-meter-fill.bad { background: var(--bad); }
+  #context-meter-pct { font-size: 0.72rem; color: var(--muted); }
+  #header-actions { margin-left: auto; display: flex; gap: 0.4rem; flex-shrink: 0; }
+  #condense-btn, #summarize-btn {
     background: transparent; border: 1px solid var(--border); color: var(--muted);
-    border-radius: 6px; padding: 0.25rem 0.6rem; font-size: 0.78rem; flex-shrink: 0;
+    border-radius: 6px; padding: 0.25rem 0.6rem; font-size: 0.78rem;
   }
-  #summarize-btn:hover:not(:disabled) { color: var(--fg); background: color-mix(in srgb, var(--accent) 10%, transparent); }
-  #summarize-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  #condense-btn:hover:not(:disabled), #summarize-btn:hover:not(:disabled) { color: var(--fg); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  #condense-btn:disabled, #summarize-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .retitle-banner { display: flex; align-items: center; justify-content: center; gap: 0.5rem; flex-wrap: wrap; }
+  .retitle-banner button {
+    background: transparent; border: 1px solid var(--border); color: var(--fg);
+    border-radius: 6px; padding: 0.15rem 0.5rem; font-size: 0.75rem;
+  }
+  #retitle-accept-btn { border-color: var(--accent); color: var(--accent); }
   #hamburger-btn {
     display: none;
     background: transparent; border: none; color: var(--fg);
@@ -172,6 +184,13 @@
 
   .message-row { padding: 1.25rem clamp(1rem, 4vw, 2rem); }
   .message-row .content { max-width: 48rem; margin: 0 auto; }
+  .message-row.divider .content {
+    display: flex; align-items: center; gap: 0.75rem;
+    color: var(--muted); font-size: 0.78rem; text-align: center;
+  }
+  .message-row.divider .content::before, .message-row.divider .content::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
+  }
   .message-row.assistant .content { text-align: left; }
   .message-row.user .content { display: flex; justify-content: flex-end; }
   .message-row.user .user-wrap { display: flex; flex-direction: column; align-items: flex-end; max-width: 70%; }
@@ -292,7 +311,14 @@
       <div id="chat-header">
         <button id="hamburger-btn" aria-label="Toggle sidebar">☰</button>
         <span style="color:var(--muted);">chrome-chat — Gemini Nano, 100% on-device</span>
-        <button id="summarize-btn" style="display:none;">Summarize</button>
+        <div id="context-meter" style="display:none;" title="How much of the model's context window this conversation has used">
+          <div id="context-meter-bar"><div id="context-meter-fill"></div></div>
+          <span id="context-meter-pct"></span>
+        </div>
+        <div id="header-actions">
+          <button id="condense-btn" style="display:none;" title="Summarize this conversation and start the model fresh from that summary">Condense</button>
+          <button id="summarize-btn" style="display:none;">Summarize</button>
+        </div>
       </div>
       <div id="chat-area">
         <div id="chat-log">
@@ -313,6 +339,11 @@
               <button class="send-btn stop-btn" id="chat-stop-btn" style="display:none;" aria-label="Stop generating">■</button>
             </div>
             <div class="composer-note" id="chat-note"></div>
+            <div class="composer-note retitle-banner" id="retitle-banner" style="display:none;">
+              Rename this conversation to “<span id="retitle-proposed-title"></span>”?
+              <button id="retitle-accept-btn">Rename</button>
+              <button id="retitle-keep-btn">Keep current</button>
+            </div>
           </div>
         </div>
       </div>
@@ -341,6 +372,14 @@
     const chatNote = document.getElementById('chat-note');
     const hamburgerBtn = document.getElementById('hamburger-btn');
     const summarizeBtn = document.getElementById('summarize-btn');
+    const condenseBtn = document.getElementById('condense-btn');
+    const contextMeterEl = document.getElementById('context-meter');
+    const contextMeterFillEl = document.getElementById('context-meter-fill');
+    const contextMeterPctEl = document.getElementById('context-meter-pct');
+    const retitleBanner = document.getElementById('retitle-banner');
+    const retitleProposedTitleEl = document.getElementById('retitle-proposed-title');
+    const retitleAcceptBtn = document.getElementById('retitle-accept-btn');
+    const retitleKeepBtn = document.getElementById('retitle-keep-btn');
     const sidebar = document.getElementById('sidebar');
     const sidebarOverlay = document.getElementById('sidebar-overlay');
 
@@ -554,6 +593,8 @@
     }
     let editingIndex = null; // index of the user message currently being edited inline, or null
     const summarizingThreadIds = new Set(); // thread ids with a manual summarize/retitle request currently in flight
+    const condensingThreadIds = new Set(); // thread ids with a manual condense request currently in flight
+    const pendingRetitle = new Map(); // threadId -> proposed title, awaiting an Accept/Keep answer in the retitle banner
     let renamingId = null; // thread id currently showing an inline rename input, or null
     let pendingDeleteId = null; // thread id armed for delete on a second click, or null
     let pendingDeleteTimer = null;
@@ -677,12 +718,21 @@
       // docked layout the instant the first message renders.
       chatArea.classList.toggle('landing', !hasMessages);
       updateSummarizeBtn();
+      updateCondenseBtn();
+      updateRetitleBanner();
+      updateContextMeter();
       chatLog.querySelectorAll('.message-row').forEach((el) => el.remove());
       const lastIndex = msgs.length - 1;
       msgs.forEach((m, i) => {
         const row = document.createElement('div');
         row.className = 'message-row ' + m.role;
-        if (m.role === 'user') {
+        if (m.role === 'divider') {
+          // A condensation boundary -- the full transcript before it stays
+          // visible here, but buildInitialPrompts() never replays anything
+          // before the LAST one of these to the model; only this summary
+          // text does, plus everything after it.
+          row.innerHTML = '<div class="content">Conversation condensed — ' + escapeHtml(m.content) + '</div>';
+        } else if (m.role === 'user') {
           if (i === editingIndex) {
             // Editing an earlier message inherently discards everything
             // after it (sequential conversation context can't fork), so
@@ -1080,6 +1130,70 @@
     }
     summarizeBtn.addEventListener('click', () => { if (activeThreadId !== null) summarizeThread(activeThreadId); });
 
+    function updateCondenseBtn() {
+      const conv = activeConv();
+      const hasContent = activeThreadId !== null && conv.messages.length > 0;
+      const isCondensing = condensingThreadIds.has(activeThreadId);
+      condenseBtn.style.display = hasContent ? 'inline-flex' : 'none';
+      condenseBtn.disabled = conv.streaming || isCondensing;
+      condenseBtn.textContent = isCondensing ? 'Condensing…' : 'Condense';
+    }
+    function updateRetitleBanner() {
+      const proposed = activeThreadId !== null ? pendingRetitle.get(activeThreadId) : null;
+      retitleBanner.style.display = proposed ? 'flex' : 'none';
+      if (proposed) retitleProposedTitleEl.textContent = proposed;
+    }
+    // Manual condensation: summarizes the WHOLE conversation so far, then
+    // destroys the current session and appends a divider message holding
+    // that summary. The full transcript before the divider stays saved and
+    // visible -- nothing the visitor said or received is ever hidden or
+    // deleted -- but buildInitialPrompts() means the *next* session only
+    // ever starts from the summary onward, genuinely freeing up context
+    // rather than quietly replaying the whole history alongside a warning.
+    // Deliberately manual only, not automatic: real-world reports of this
+    // kind of automatic context compaction in other agentic tools describe
+    // it derailing whatever was mid-task when it fired uninvited.
+    async function condenseThread(threadId) {
+      const conv = conversations.get(threadId);
+      if (!conv || conv.streaming || condensingThreadIds.has(threadId)) return;
+      condensingThreadIds.add(threadId);
+      updateCondenseBtn();
+      try {
+        const { title, summary } = await generateSummaryAndTitle(transcriptFor(conv.messages));
+        if (!summary) throw new Error('could not read a summary from the response');
+        if (conv.session) { try { conv.session.destroy(); } catch {} conv.session = null; }
+        conv.messages.push({ role: 'divider', content: summary });
+        persistThread(threadId);
+        if (activeThreadId === threadId) renderChat();
+        // The retitle proposal is asked, never applied silently -- answered
+        // via the composer's Accept/Keep banner, not auto-renamed.
+        if (title) {
+          pendingRetitle.set(threadId, title);
+          if (activeThreadId === threadId) updateRetitleBanner();
+        }
+      } catch (e) {
+        if (activeThreadId === threadId) chatNote.textContent = 'Could not condense: ' + e.message;
+      } finally {
+        condensingThreadIds.delete(threadId);
+        updateCondenseBtn();
+      }
+    }
+    condenseBtn.addEventListener('click', () => { if (activeThreadId !== null) condenseThread(activeThreadId); });
+    retitleAcceptBtn.addEventListener('click', () => {
+      const threadId = activeThreadId;
+      const proposed = pendingRetitle.get(threadId);
+      if (!proposed) return;
+      const idx = loadIndex();
+      const entry = idx.find((t) => t.id === threadId);
+      if (entry) { entry.title = proposed; saveIndex(idx); renderThreadList(); }
+      pendingRetitle.delete(threadId);
+      updateRetitleBanner();
+    });
+    retitleKeepBtn.addEventListener('click', () => {
+      pendingRetitle.delete(activeThreadId);
+      updateRetitleBanner();
+    });
+
     function closeSidebarMobile() {
       sidebar.classList.remove('open');
       sidebarOverlay.classList.remove('visible');
@@ -1142,7 +1256,7 @@
       chatNote.textContent = 'Loading this conversation into the model…';
       try {
         conv.session = await LanguageModel.create({
-          initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }, ...conv.messages.map((m) => ({ role: m.role, content: m.content }))],
+          initialPrompts: buildInitialPrompts(conv.messages),
           expectedInputs: [{ type: 'text' }, { type: 'image' }, { type: 'audio' }],
           // Same download-progress feedback sendText's session creation
           // already has -- without this, reopening a saved thread on a
@@ -1166,6 +1280,7 @@
     // hits a hard QuotaExceededError, not after. Only ever called for
     // whichever thread is currently displayed.
     function warnIfNearLimit() {
+      updateContextMeter();
       const conv = activeConv();
       if (!conv.session || conv.session.contextUsage == null || conv.session.contextWindow == null) return;
       const ratio = conv.session.contextUsage / conv.session.contextWindow;
@@ -1176,6 +1291,43 @@
       } else {
         chatNote.classList.remove('warn');
       }
+    }
+    // Real, visible context-window usage -- separate from the 85% warning
+    // above, which only ever fires once real usage crosses that threshold.
+    // Safe to call often (including from renderChat on every thread switch)
+    // since it's just a read of the session's own numbers, no model call.
+    function updateContextMeter() {
+      const conv = activeConv();
+      if (!conv.session || conv.session.contextUsage == null || conv.session.contextWindow == null) {
+        contextMeterEl.style.display = 'none';
+        return;
+      }
+      const ratio = conv.session.contextUsage / conv.session.contextWindow;
+      const pct = Math.min(100, Math.round(ratio * 100));
+      contextMeterEl.style.display = 'flex';
+      contextMeterFillEl.style.width = pct + '%';
+      contextMeterFillEl.className = ratio > 0.85 ? 'bad' : ratio > 0.6 ? 'warn' : '';
+      contextMeterPctEl.textContent = pct + '%';
+    }
+    // Builds a fresh session's initialPrompts, aware of any condensation
+    // divider in the message history: everything up to and including the
+    // LAST divider collapses into a single summary turn instead of being
+    // replayed verbatim, so a condensed conversation's model-facing context
+    // genuinely restarts from the summary -- not the full pre-condensation
+    // history alongside it. With no divider present, this is exactly the
+    // old plain "system prompt + every message verbatim" behavior.
+    function buildInitialPrompts(msgs) {
+      let startIdx = 0;
+      let priorSummary = null;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'divider') { startIdx = i + 1; priorSummary = msgs[i].content; break; }
+      }
+      const prompts = [{ role: 'system', content: SYSTEM_PROMPT }];
+      if (priorSummary) prompts.push({ role: 'system', content: 'Summary of the conversation so far: ' + priorSummary });
+      for (let i = startIdx; i < msgs.length; i++) {
+        prompts.push({ role: msgs[i].role, content: msgs[i].content });
+      }
+      return prompts;
     }
 
     newChatBtn.addEventListener('click', startNewChat);
@@ -1448,7 +1600,7 @@
           // real preserved history, so a freshly (re)created session doesn't
           // silently forget context that should still be there.
           conv.session = await LanguageModel.create({
-            initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }, ...conv.messages.slice(0, -1).map((m) => ({ role: m.role, content: m.content }))],
+            initialPrompts: buildInitialPrompts(conv.messages.slice(0, -1)),
             expectedInputs: [{ type: 'text' }, { type: 'image' }, { type: 'audio' }],
             monitor(m) {
               m.addEventListener('downloadprogress', (e) => {
