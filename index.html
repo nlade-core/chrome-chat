@@ -131,6 +131,13 @@
     border-bottom: 1px solid var(--border);
     font-size: 0.85rem;
   }
+  #summarize-btn {
+    margin-left: auto;
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 6px; padding: 0.25rem 0.6rem; font-size: 0.78rem; flex-shrink: 0;
+  }
+  #summarize-btn:hover:not(:disabled) { color: var(--fg); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  #summarize-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   #hamburger-btn {
     display: none;
     background: transparent; border: none; color: var(--fg);
@@ -285,6 +292,7 @@
       <div id="chat-header">
         <button id="hamburger-btn" aria-label="Toggle sidebar">☰</button>
         <span style="color:var(--muted);">chrome-chat — Gemini Nano, 100% on-device</span>
+        <button id="summarize-btn" style="display:none;">Summarize</button>
       </div>
       <div id="chat-area">
         <div id="chat-log">
@@ -332,6 +340,7 @@
     const removeAttachmentBtn = document.getElementById('remove-attachment-btn');
     const chatNote = document.getElementById('chat-note');
     const hamburgerBtn = document.getElementById('hamburger-btn');
+    const summarizeBtn = document.getElementById('summarize-btn');
     const sidebar = document.getElementById('sidebar');
     const sidebarOverlay = document.getElementById('sidebar-overlay');
 
@@ -544,6 +553,7 @@
       }
     }
     let editingIndex = null; // index of the user message currently being edited inline, or null
+    const summarizingThreadIds = new Set(); // thread ids with a manual summarize/retitle request currently in flight
     let renamingId = null; // thread id currently showing an inline rename input, or null
     let pendingDeleteId = null; // thread id armed for delete on a second click, or null
     let pendingDeleteTimer = null;
@@ -666,6 +676,7 @@
       // greeting rather than docked at the bottom -- flips to the normal
       // docked layout the instant the first message renders.
       chatArea.classList.toggle('landing', !hasMessages);
+      updateSummarizeBtn();
       chatLog.querySelectorAll('.message-row').forEach((el) => el.remove());
       const lastIndex = msgs.length - 1;
       msgs.forEach((m, i) => {
@@ -1004,6 +1015,70 @@
       saveIndex(idx);
       renderThreadList();
     }
+
+    // Manual, on-demand alternative to the silent one-shot title above --
+    // reads the WHOLE conversation so far (not just the first message) and
+    // produces both a refreshed title and a short summary, stored as plain
+    // metadata on the thread's index entry. Unlike generateTitle, this is
+    // user-triggered (a button, not fire-and-forget) so it's fine to show
+    // real loading state and block re-clicking while it's in flight.
+    const SUMMARY_SYSTEM_PROMPT = 'You read a conversation transcript and produce a short title and a brief summary for it. Given the transcript below, respond in EXACTLY this format and nothing else:\nTITLE: <a 3-6 word title>\nSUMMARY: <a 2-3 sentence summary of what was discussed>';
+    function transcriptFor(messages) {
+      return messages.map((m) => (m.role === 'user' ? 'User: ' : 'Assistant: ') + m.content).join('\n\n');
+    }
+    async function generateSummaryAndTitle(transcriptText) {
+      const session = await LanguageModel.create({ initialPrompts: [{ role: 'system', content: SUMMARY_SYSTEM_PROMPT }] });
+      try {
+        const raw = await session.prompt(transcriptText);
+        const titleMatch = raw.match(/TITLE:\s*(.+)/i);
+        const summaryMatch = raw.match(/SUMMARY:\s*([\s\S]+)/i);
+        const title = titleMatch ? titleMatch[1].trim().replace(/^["'“”]+|["'“”]+$/g, '').replace(/[.!?]+$/, '') : null;
+        const summary = summaryMatch ? summaryMatch[1].trim() : null;
+        return { title, summary };
+      } finally {
+        try { session.destroy(); } catch {}
+      }
+    }
+    // Keeps the button's label/enabled state/tooltip in sync with whatever
+    // thread is currently displayed. Deliberately skips the localStorage
+    // lookup for the tooltip text while hidden or mid-stream -- this runs
+    // from inside renderChat(), which itself fires on every streamed chunk,
+    // so that lookup would otherwise run many times a second for no reason.
+    function updateSummarizeBtn() {
+      const conv = activeConv();
+      const hasContent = activeThreadId !== null && conv.messages.length > 0;
+      const isSummarizing = summarizingThreadIds.has(activeThreadId);
+      summarizeBtn.style.display = hasContent ? 'inline-flex' : 'none';
+      summarizeBtn.disabled = conv.streaming || isSummarizing;
+      summarizeBtn.textContent = isSummarizing ? 'Summarizing…' : 'Summarize';
+      if (!hasContent || conv.streaming) return;
+      const entry = loadIndex().find((t) => t.id === activeThreadId);
+      summarizeBtn.title = entry && entry.summary ? entry.summary : 'Generate a summary and refresh this conversation\'s title';
+    }
+    async function summarizeThread(threadId) {
+      const conv = conversations.get(threadId);
+      if (!conv || conv.streaming || summarizingThreadIds.has(threadId)) return;
+      summarizingThreadIds.add(threadId);
+      updateSummarizeBtn();
+      try {
+        const { title, summary } = await generateSummaryAndTitle(transcriptFor(conv.messages));
+        if (!title && !summary) throw new Error('could not read a title or summary from the response');
+        const idx = loadIndex();
+        const entry = idx.find((t) => t.id === threadId);
+        if (entry) {
+          if (title) entry.title = title;
+          if (summary) entry.summary = summary;
+          saveIndex(idx);
+          renderThreadList();
+        }
+      } catch (e) {
+        if (activeThreadId === threadId) chatNote.textContent = 'Could not generate a summary: ' + e.message;
+      } finally {
+        summarizingThreadIds.delete(threadId);
+        updateSummarizeBtn();
+      }
+    }
+    summarizeBtn.addEventListener('click', () => { if (activeThreadId !== null) summarizeThread(activeThreadId); });
 
     function closeSidebarMobile() {
       sidebar.classList.remove('open');
