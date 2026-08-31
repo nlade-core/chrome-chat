@@ -323,8 +323,22 @@
     const INDEX_KEY = PREFIX + 'index';
     const threadKey = (id) => PREFIX + 'thread:' + id;
 
-    function loadIndex() { try { return JSON.parse(localStorage.getItem(INDEX_KEY)) || []; } catch { return []; } }
-    function saveIndex(list) { localStorage.setItem(INDEX_KEY, JSON.stringify(list)); }
+    // Schema version for the INDEX specifically (not the per-thread message
+    // arrays, which haven't changed shape yet -- this same pattern extends
+    // to those too if that ever changes). v1 (implicit, never stamped) was a
+    // bare array; v2 wraps it with a version tag so a future shape change
+    // can be detected and migrated instead of silently misread or crashing.
+    const SCHEMA_VERSION = 2;
+
+    function loadIndex() {
+      let raw;
+      try { raw = JSON.parse(localStorage.getItem(INDEX_KEY)); } catch { return []; }
+      if (raw == null) return [];
+      if (Array.isArray(raw)) return raw; // v1, unversioned -- migrates transparently on the next saveIndex()
+      if (Array.isArray(raw.threads)) return raw.threads; // v2 (or any future version using this same wrapper shape)
+      return []; // unrecognized shape -- fail safe rather than crash
+    }
+    function saveIndex(list) { localStorage.setItem(INDEX_KEY, JSON.stringify({ version: SCHEMA_VERSION, threads: list })); }
     function loadThreadMessages(id) { try { return JSON.parse(localStorage.getItem(threadKey(id))) || []; } catch { return []; } }
     function saveThreadMessages(id, msgs) { localStorage.setItem(threadKey(id), JSON.stringify(msgs)); }
     function deleteThread(id) { localStorage.removeItem(threadKey(id)); saveIndex(loadIndex().filter((t) => t.id !== id)); }
