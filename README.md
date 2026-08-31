@@ -20,6 +20,7 @@ Built directly on two pages from [`pages-lab-ai`](https://github.com/nlade-core/
 - Search saved conversations by title *and* full message content
 - A "scroll to bottom" button that appears once you've scrolled up mid-conversation
 - **Conversation forking**: editing a message offers "Fork" alongside "Save & submit" — instead of overwriting, it creates a brand-new conversation with everything before the edit preserved, leaving the original completely untouched. Forked conversations collapse into a single sidebar entry (the original's title + a count badge); expanding it shows every version — original and forks alike — as neutral peers with a relation tag and last-updated time, no version auto-selected as "main". Forking a fork still traces back to the true original, however deep the chain.
+- **Multimodal input**: attach an image or audio clip alongside your message. Honest limitation, disclosed rather than hidden: attachments aren't saved across a reload (no binary storage here, `localStorage` is text-only) — a message that had one shows a plain "attached (not saved across reloads)" note instead of silently losing all trace of it.
 
 ## Requirements
 
@@ -53,7 +54,9 @@ End to end with Playwright, stubbing `window.LanguageModel` (this is an ordinary
 - The scroll-to-bottom button appears only once scrolled away from the bottom, and correctly hides itself when switching conversations even if you'd scrolled up in the previous one.
 - Forking leaves the original thread's saved messages and index entry byte-for-byte unchanged; a fork's `forkedFrom`/`forkRoot` are correct, and forking a fork still resolves `forkRoot` back to the true original two levels back, not the intermediate fork. A 3-member family (original + fork + fork-of-a-fork) collapses to one sidebar row with the correct count badge; expanding shows exactly one "Original" and the rest tagged "Fork"; the row highlights as active whenever any member is the open conversation. Renaming a family's root updates the sidebar label live. Deleting a thread with dependent forks warns with the real count first, and — once confirmed — the surviving forks correctly render as a plain standalone row rather than a broken family display.
 
-**Not yet verified:** real Gemini Nano answer quality, real streaming latency, and real `contextWindow`/`contextUsage` figures — all need testing in actual Chrome, not a stub.
+- Attaching a file sends a real File as part of the model turn alongside any text, every session declares all three `expectedInputs`, a live attachment renders as a real inline preview, and after a reload that preview is honestly replaced by a disclosed "not saved" marker rather than silently vanishing — confirmed against the actual stored JSON, which carries the type marker with no corrupted leftover file reference.
+
+**Not yet verified:** real Gemini Nano answer quality, real streaming latency, real `contextWindow`/`contextUsage` figures, and real multimodal understanding (does it actually describe an attached image sensibly) — all need testing in actual Chrome, not a stub.
 
 ## License
 
