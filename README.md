@@ -47,7 +47,7 @@ End to end with Playwright, stubbing `window.LanguageModel` (this is an ordinary
 - Mobile layout: sidebar genuinely off-screen by default, opens via the hamburger button, closes on overlay click or Escape.
 - Zero `LanguageModel.create()` calls at page load or after a reload — the model is never touched just from opening the page.
 - Sending a message creates exactly one session; a second "+ New chat" doesn't create another one until you actually send.
-- Reopening a saved conversation replays the *exact* saved history into a fresh session via `initialPrompts` — confirmed by inspecting the real argument passed to `create()`, not just checking the UI.
+- Reopening a saved conversation replays the *exact* saved history into a fresh session via `initialPrompts` — confirmed by inspecting the real argument passed to `create()`, not just checking the UI. If that requires downloading the model, real progress percentages show here too, not just on a fresh send.
 - A response containing a literal `<script>` tag and Markdown formatting renders as inert escaped text with the formatting intact — no real script executes.
 - Stop generation cancels the stream immediately via a real `AbortSignal`; no further chunks land even if the underlying call resumes afterward, and the partial reply still gets a Copy button.
 - Regenerating the last reply preserves every earlier exchange (confirmed via the exact `initialPrompts` sent to the recreated session), drops only the pair being regenerated, and resends the real original message — not a placeholder.
