@@ -1046,10 +1046,19 @@
           const input = threadListEl.querySelector('.thread-rename-input');
           if (input) { input.focus(); input.select(); }
         }
+      } else if (!allThreads.length) {
+        threadListEl.innerHTML = '<div class="empty-hint">No saved conversations yet.</div>';
+      } else if (aiSearchResultsFor && aiSearchResultsFor.query === query && aiSearchResultsFor.ids.length) {
+        // Distinct section, never blended silently into the normal list --
+        // it should never be ambiguous why a thread with none of the actual
+        // search words in it just appeared.
+        const matched = aiSearchResultsFor.ids.map((id) => allThreads.find((t) => t.id === id)).filter(Boolean);
+        threadListEl.innerHTML = '<div class="empty-hint">No exact matches — found by meaning:</div>' +
+          matched.map((t) => renderThreadItemRow(t, false)).join('');
+      } else if (aiSearchInFlightFor === query) {
+        threadListEl.innerHTML = '<div class="empty-hint">No exact matches — searching more broadly using AI…</div>';
       } else {
-        threadListEl.innerHTML = '<div class="empty-hint">' +
-          (allThreads.length ? 'No conversations match your search.' : 'No saved conversations yet.') +
-          '</div>';
+        threadListEl.innerHTML = '<div class="empty-hint">No conversations match your search.</div>';
       }
     }
     renderThreadList();
@@ -1179,6 +1188,70 @@
       } finally {
         throwawaySessionsInFlight--;
       }
+    }
+
+    // AI-assisted fallback for when the literal (word-by-word) search comes
+    // up completely empty -- not a replacement for it, and not embeddings
+    // (Chrome's on-device Embedding API isn't shipped yet, see README).
+    // Instead: ONE model call carrying every thread's title + summary (short
+    // text, so even a few hundred threads fit comfortably) asks the model
+    // which ones are relevant to the query, entirely distinct from the
+    // one-model-call-per-thread approach that wouldn't scale. Its own
+    // throwaway session, same as title-gen/Summarize/Condense.
+    const AI_SEARCH_SYSTEM_PROMPT = 'You help find relevant saved conversations from a numbered list of titles and summaries. Given a search query and the list, reply with ONLY the relevant entry numbers, comma-separated, best match first. If none are relevant, reply with exactly: none. No explanation, nothing else.';
+    async function aiSearchThreads(query, candidates) {
+      const listText = candidates.map((c, i) => (i + 1) + '. ' + c.title + (c.summary ? '\n   Summary: ' + c.summary : '')).join('\n');
+      throwawaySessionsInFlight++;
+      try {
+        const session = await LanguageModel.create({ initialPrompts: [{ role: 'system', content: AI_SEARCH_SYSTEM_PROMPT }] });
+        try {
+          const raw = await session.prompt('Query: "' + query + '"\n\nConversations:\n' + listText);
+          if (/^\s*none\s*$/i.test(raw.trim())) return [];
+          const ids = [];
+          for (const numStr of raw.match(/\d+/g) || []) {
+            const idx = parseInt(numStr, 10) - 1;
+            if (idx >= 0 && idx < candidates.length && !ids.includes(candidates[idx].id)) ids.push(candidates[idx].id);
+          }
+          return ids;
+        } finally {
+          try { session.destroy(); } catch {}
+        }
+      } finally {
+        throwawaySessionsInFlight--;
+      }
+    }
+    let aiSearchDebounceTimer = null;
+    let aiSearchInFlightFor = null; // query string currently being AI-searched, or null
+    let aiSearchResultsFor = null; // { query, ids } -- most recent COMPLETED AI search result, only valid for this exact query
+    // Debounced, and re-checks the literal search is STILL empty at fire
+    // time -- normal typing that finds real matches along the way never
+    // reaches the model at all, only a query that stays empty for a moment.
+    function scheduleAiSearchIfNeeded() {
+      clearTimeout(aiSearchDebounceTimer);
+      const query = searchQuery.trim();
+      if (!query || !loadIndex().length) return; // nothing saved at all -- nothing for the model to search over
+      aiSearchDebounceTimer = setTimeout(() => {
+        const stillEmpty = loadIndex().every((t) => threadSearchRank(t, query) === null);
+        if (stillEmpty) runAiSearch(query);
+      }, 500);
+    }
+    async function runAiSearch(query) {
+      aiSearchInFlightFor = query;
+      renderThreadList();
+      const candidates = loadIndex().map((t) => ({ id: t.id, title: t.title, summary: t.summary }));
+      let ids = [];
+      try {
+        ids = await aiSearchThreads(query, candidates);
+      } catch {
+        ids = [];
+      }
+      aiSearchInFlightFor = null;
+      // The visitor may have kept typing while this was in flight -- a
+      // response for an old query popping in over a new one would be
+      // confusing at best, wrong at worst. Discarded, not applied.
+      if (searchQuery.trim() !== query) { renderThreadList(); return; }
+      aiSearchResultsFor = { query, ids };
+      renderThreadList();
     }
     // Keeps the button's label/enabled state/tooltip in sync with whatever
     // thread is currently displayed. Deliberately skips the localStorage
@@ -1491,7 +1564,13 @@
 
     threadSearchInput.addEventListener('input', () => {
       searchQuery = threadSearchInput.value;
+      // Any previous AI search result is for a DIFFERENT query now -- drop
+      // it immediately rather than risk it looking like it still applies.
+      aiSearchResultsFor = null;
+      clearTimeout(aiSearchDebounceTimer);
+      aiSearchInFlightFor = null;
       renderThreadList();
+      scheduleAiSearchIfNeeded();
     });
 
     hamburgerBtn.addEventListener('click', () => {
