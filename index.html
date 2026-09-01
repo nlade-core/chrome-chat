@@ -330,7 +330,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-01 11:28 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-01 13:38 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -665,6 +665,12 @@
     let searchQuery = '';
     let expandedFamilyRoot = null; // root id of the currently-expanded fork family in the sidebar, or null
     let pendingAttachment = null; // { file: File, type: 'image'|'audio' } queued for the next send, or null
+    // True only when the current pendingAttachment was fetched by a /wiki
+    // image command, never when it's a real file the visitor picked --
+    // lets automatic cleanup (clearUrlContext) safely drop the one it
+    // fetched without ever touching an attachment the visitor chose
+    // themselves.
+    let wikiImageOwnsAttachment = false;
 
     let modelAvailability = null; // the raw availability() string, kept around so prewarming/landing messaging can reuse it instead of re-querying
     async function checkCapability() {
@@ -1663,11 +1669,13 @@
         return;
       }
       pendingAttachment = { file, type };
+      wikiImageOwnsAttachment = false; // a real manual pick always overrides/disowns anything a /wiki image fetch had set
       attachmentNameEl.textContent = file.name;
       attachmentChip.style.display = 'flex';
     });
     removeAttachmentBtn.addEventListener('click', () => {
       pendingAttachment = null;
+      wikiImageOwnsAttachment = false;
       attachInput.value = '';
       attachmentChip.style.display = 'none';
     });
@@ -1781,6 +1789,29 @@
       return 'Wikipedia (full article): ' + title + '\n' + body
         + (truncated ? '\n\n[...truncated -- showing the first ' + MAX_FULL_ARTICLE_CHARS + ' of ' + extract.length + ' characters]' : '');
     }
+    // /wiki image <topic> -- same resolution again, but pulls the article's
+    // lead photo (via the REST media-list endpoint) and attaches it exactly
+    // like a manually-picked file would, so it's both visible in the chat
+    // and handed to the model as real multimodal input, not just described.
+    const WIKI_IMAGE_SLASH_PREFIX = '/wiki image ';
+    async function fetchWikiLeadImage(title) {
+      const res = await fetch('https://en.wikipedia.org/api/rest_v1/page/media-list/' + encodeURIComponent(title.replace(/ /g, '_')));
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const items = data.items || [];
+      const chosen = items.find((it) => it.type === 'image' && it.leadImage) || items.find((it) => it.type === 'image' && it.showInGallery);
+      const entry = chosen && chosen.srcset && chosen.srcset[0];
+      if (!entry) throw new Error('no image found for this article');
+      // Always use the exact URL media-list hands back -- confirmed live
+      // that hand-constructing a different width (e.g. swapping in "200px-")
+      // returns a Wikimedia error page, not an image; only specific
+      // pre-rendered widths actually exist.
+      const imgUrl = entry.src.startsWith('//') ? 'https:' + entry.src : entry.src;
+      const imgRes = await fetch(imgUrl);
+      if (!imgRes.ok) throw new Error('HTTP ' + imgRes.status + ' fetching the image itself');
+      const blob = await imgRes.blob();
+      return { blob, title: chosen.title.replace(/^File:/, '') };
+    }
 
     // pendingUrlContext holds the fetched, ready-to-send context; the token
     // guards against a slow fetch resolving after the visitor has already
@@ -1799,6 +1830,12 @@
     function clearUrlContext() {
       pendingUrlContext = null;
       urlContextChip.style.display = 'none';
+      if (wikiImageOwnsAttachment) {
+        pendingAttachment = null;
+        wikiImageOwnsAttachment = false;
+        attachInput.value = '';
+        attachmentChip.style.display = 'none';
+      }
     }
     removeUrlContextBtn.addEventListener('click', clearUrlContext);
     // The one entry point for resolving whatever's currently in the
@@ -1809,13 +1846,14 @@
       const text = chatInput.value;
       const trimmed = text.trim();
       const lower = trimmed.toLowerCase();
-      if (lower.startsWith(WIKI_FULL_SLASH_PREFIX) || lower.startsWith(WIKI_SLASH_PREFIX)) {
+      if (lower.startsWith(WIKI_IMAGE_SLASH_PREFIX) || lower.startsWith(WIKI_FULL_SLASH_PREFIX) || lower.startsWith(WIKI_SLASH_PREFIX)) {
         if (pendingUrlContext && pendingUrlContext.matchedText === trimmed) return;
         if (trimmed === urlContextInFlightKey) { await urlContextInFlightPromise; return; }
-        const fullMode = lower.startsWith(WIKI_FULL_SLASH_PREFIX);
-        const query = trimmed.slice(fullMode ? WIKI_FULL_SLASH_PREFIX.length : WIKI_SLASH_PREFIX.length).trim();
+        const mode = lower.startsWith(WIKI_IMAGE_SLASH_PREFIX) ? 'image' : lower.startsWith(WIKI_FULL_SLASH_PREFIX) ? 'full' : 'summary';
+        const prefixLen = mode === 'image' ? WIKI_IMAGE_SLASH_PREFIX.length : mode === 'full' ? WIKI_FULL_SLASH_PREFIX.length : WIKI_SLASH_PREFIX.length;
+        const query = trimmed.slice(prefixLen).trim();
         if (!query) { urlContextInFlightKey = null; urlContextInFlightPromise = null; clearUrlContext(); return; }
-        const p = resolveWikiSlashCommand(trimmed, query, fullMode);
+        const p = resolveWikiSlashCommand(trimmed, query, mode);
         urlContextInFlightKey = trimmed;
         urlContextInFlightPromise = p;
         await p;
@@ -1863,7 +1901,7 @@
         if (urlContextInFlightKey === found.url) { urlContextInFlightKey = null; urlContextInFlightPromise = null; }
       }
     }
-    async function resolveWikiSlashCommand(trimmed, query, fullMode) {
+    async function resolveWikiSlashCommand(trimmed, query, mode) {
       const myToken = ++urlContextToken;
       urlContextChip.style.display = 'flex';
       urlContextNameEl.textContent = 'Searching Wikipedia for "' + query + '"…';
@@ -1894,21 +1932,41 @@
           break;
         }
         if (!resolved) throw new Error('only found a disambiguation page ("' + lastDisambiguationTitle + '") -- try being more specific');
-        let contextText;
-        if (fullMode) {
-          urlContextNameEl.textContent = 'Fetching full article: ' + resolved.candidate.title + '…';
-          const extract = await fetchFullArticleText(resolved.candidate.title);
+
+        if (mode === 'image') {
+          urlContextNameEl.textContent = 'Fetching image: ' + resolved.candidate.title + '…';
+          const { blob, title: imageTitle } = await fetchWikiLeadImage(resolved.candidate.title);
           if (myToken !== urlContextToken) return;
-          contextText = formatFullArticle(resolved.candidate.title, extract);
+          pendingAttachment = { file: blob, type: 'image' };
+          wikiImageOwnsAttachment = true;
+          attachmentNameEl.textContent = imageTitle;
+          attachmentChip.style.display = 'flex';
+          const label = resolved.candidate.title + ' (image)';
+          pendingUrlContext = { url: resolved.candidate.url, label, text: 'Wikipedia image from "' + resolved.candidate.title + '": ' + imageTitle, matchedText: trimmed };
+          urlContextNameEl.textContent = '🔗 ' + label;
         } else {
-          contextText = wikiSrc.format(resolved.json);
+          let contextText;
+          if (mode === 'full') {
+            urlContextNameEl.textContent = 'Fetching full article: ' + resolved.candidate.title + '…';
+            const extract = await fetchFullArticleText(resolved.candidate.title);
+            if (myToken !== urlContextToken) return;
+            contextText = formatFullArticle(resolved.candidate.title, extract);
+          } else {
+            contextText = wikiSrc.format(resolved.json);
+          }
+          const label = resolved.candidate.title + (mode === 'full' ? ' (full article)' : '');
+          pendingUrlContext = { url: resolved.candidate.url, label, text: contextText, matchedText: trimmed };
+          urlContextNameEl.textContent = '🔗 ' + label;
         }
-        const label = resolved.candidate.title + (fullMode ? ' (full article)' : '');
-        pendingUrlContext = { url: resolved.candidate.url, label, text: contextText, matchedText: trimmed };
-        urlContextNameEl.textContent = '🔗 ' + label;
       } catch (e) {
         if (myToken !== urlContextToken) return;
         pendingUrlContext = null;
+        if (wikiImageOwnsAttachment) {
+          pendingAttachment = null;
+          wikiImageOwnsAttachment = false;
+          attachInput.value = '';
+          attachmentChip.style.display = 'none';
+        }
         urlContextNameEl.textContent = "Couldn't find that on Wikipedia (" + (e.message || 'network error') + ')';
         setTimeout(() => { if (myToken === urlContextToken) clearUrlContext(); }, 4000);
       } finally {
@@ -2120,8 +2178,7 @@
     let sendChatGuardActive = false; // blocks a re-entrant Enter/click while resolving a pending link/slash-command below, so a fast double-Enter can't race in
     async function sendChat() {
       const text = chatInput.value.trim();
-      const attachment = pendingAttachment;
-      if ((!text && !attachment) || !promptOk || sendChatGuardActive) return;
+      if ((!text && !pendingAttachment) || !promptOk || sendChatGuardActive) return;
       // A pasted link or /wiki command might still be resolving (or not even
       // have started resolving yet -- the debounce is 500ms, easily beaten
       // by a fast Enter). Force that resolution to finish here rather than
@@ -2145,10 +2202,18 @@
         // text in place so they can retry, wait, or edit it.
         return;
       }
+      // Captured only now, AFTER resolution -- a /wiki image command's
+      // fetched image isn't actually set on pendingAttachment until
+      // maybeFetchUrlContext above finishes. Capturing it earlier (like
+      // urlContext used to be captured too early) would send the message
+      // with no image at all, the exact same race the urlContext fix above
+      // already had to solve once.
       const urlContext = pendingUrlContext;
+      const attachment = pendingAttachment;
       chatInput.value = '';
       autoResize();
       pendingAttachment = null;
+      wikiImageOwnsAttachment = false;
       attachInput.value = '';
       attachmentChip.style.display = 'none';
       clearUrlContext();
