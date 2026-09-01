@@ -87,6 +87,7 @@ End to end with Playwright, stubbing `window.LanguageModel` (this is an ordinary
 3. **Theme toggle.** Not designed yet.
 4. **Cross-tab write-locking.** Two tabs open on the same saved conversation can silently overwrite each other's save (a `navigator.locks`-based fix is designed, just not built — see project notes). Low priority for a single-user tool; revisit if it's ever actually hit in practice.
 5. **The original "differentiated" tier, unstarted:** a live zero-network-requests indicator, Pyodide-based tool use, a thinking-mode toggle. All just named candidates so far, none designed.
+6. **Semantic search over saved conversations, parked pending a real API.** Chrome has a proposed on-device Embedding API (generates vector embeddings locally, aimed squarely at semantic search/RAG) — but as of writing it's at "Intent to Prototype," the earliest stage of Chrome's shipping process, not available in any released Chrome build. A separate embedding model via a JS library would work today, but that's a real identity shift for a project whose whole pitch has been "100% Gemini Nano, zero extra dependencies" — worth a deliberate decision, not a quick add. Revisit once Chrome's own API actually ships. A smaller, immediately-available step in the meantime: extend search to also match the `summary` field the Summarize/Condense feature already generates, not just title + raw message content.
 
 ## License
 
