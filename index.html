@@ -330,7 +330,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-01 10:38 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-01 11:03 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -1731,21 +1731,32 @@
 
     // /wiki <topic> -- a slash command for when you don't have (or don't
     // want to look up) an exact article URL. Resolves free text to a real
-    // article via Wikipedia's own search API (its opensearch endpoint,
-    // confirmed CORS-open the same way via curl -- the `origin=*` param is
-    // what actually turns that on; without it there's no CORS header at
-    // all), then fetches and formats its summary exactly like a pasted
-    // Wikipedia link would, reusing that same formatter. The whole message
-    // is treated as the command -- whatever follows "/wiki " is the query.
+    // article via Wikipedia's own full-text search API (`action=query&
+    // list=search` -- confirmed CORS-open via curl the same way, gated on
+    // the same `origin=*` param), then fetches and formats its summary
+    // exactly like a pasted Wikipedia link would, reusing that same
+    // formatter. The whole message is treated as the command -- whatever
+    // follows "/wiki " is the query.
+    //
+    // Deliberately NOT the `opensearch` endpoint (tried first, then
+    // replaced): that one only matches article TITLES -- the same
+    // mechanism behind the autocomplete dropdown as you type into
+    // Wikipedia's own search box -- so a real question like "who invented
+    // the telephone" came back empty. Full-text search matches actual
+    // article content (confirmed: same title-style queries resolve
+    // identically, e.g. "jarvis island" -> Jarvis Island either way, but
+    // only this one finds "Alexander Graham Bell" from that question) --
+    // it's what Wikipedia's own search box actually falls back to once you
+    // hit Enter/Search, not just the suggestion dropdown.
     const WIKI_SLASH_PREFIX = '/wiki ';
     async function resolveWikiSearch(query) {
-      const res = await fetch('https://en.wikipedia.org/w/api.php?action=opensearch&search=' + encodeURIComponent(query) + '&limit=1&namespace=0&format=json&origin=*');
+      const res = await fetch('https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=' + encodeURIComponent(query) + '&srlimit=1&format=json&origin=*');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
-      const titles = data[1] || [];
-      const urls = data[3] || [];
-      if (!titles.length) return null;
-      return { title: titles[0], url: urls[0] };
+      const results = (data.query && data.query.search) || [];
+      if (!results.length) return null;
+      const title = results[0].title;
+      return { title, url: 'https://en.wikipedia.org/wiki/' + encodeURIComponent(title.replace(/ /g, '_')) };
     }
 
     // pendingUrlContext holds the fetched, ready-to-send context; the token
