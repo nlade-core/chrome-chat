@@ -266,6 +266,12 @@
   .msg-attachment-missing { color: var(--muted); font-size: 0.8rem; font-style: italic; margin-bottom: 0.4rem; }
   .msg-url-context { font-size: 0.78rem; margin-top: 0.35rem; opacity: 0.85; }
   .msg-url-context a { color: inherit; }
+  .msg-url-context summary { cursor: pointer; color: var(--muted); margin-top: 0.3rem; }
+  .msg-url-context pre {
+    white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto;
+    background: color-mix(in srgb, var(--fg) 6%, transparent); border-radius: 0.5rem;
+    padding: 0.5rem 0.6rem; margin-top: 0.3rem; font-family: inherit; font-size: 0.8rem;
+  }
   .send-btn {
     position: absolute; right: 0.5rem; bottom: 0.5rem;
     width: 2rem; height: 2rem; border-radius: 50%;
@@ -844,7 +850,9 @@
             const editBtn = (!isStreaming && editingIndex === null)
               ? '<div class="msg-actions"><button class="icon-btn edit-btn" data-i="' + i + '">Edit</button></div>' : '';
             const urlCite = m.urlContext
-              ? '<div class="msg-url-context">🔗 <a href="' + escapeHtml(m.urlContext.url) + '" target="_blank" rel="noopener">' + escapeHtml(m.urlContext.label) + '</a></div>'
+              ? '<div class="msg-url-context">🔗 <a href="' + escapeHtml(m.urlContext.url) + '" target="_blank" rel="noopener">' + escapeHtml(m.urlContext.label) + '</a>'
+                + (m.urlContext.text ? '<details><summary>Show what was fetched</summary><pre>' + escapeHtml(m.urlContext.text) + '</pre></details>' : '')
+                + '</div>'
               : '';
             row.innerHTML = '<div class="content"><div class="user-wrap"><div class="bubble">' + renderAttachmentHtml(m) + renderMarkdown(m.content) + urlCite + '</div>' + editBtn + '</div></div>';
           }
@@ -1889,7 +1897,7 @@
       const isShown = () => activeThreadId === threadId;
       if (isShown()) chatSendBtn.disabled = true;
       const userMsg = { role: 'user', content: text };
-      if (urlContext) userMsg.urlContext = { url: urlContext.url, label: urlContext.label };
+      if (urlContext) userMsg.urlContext = { url: urlContext.url, label: urlContext.label, text: urlContext.text };
       let modelAttachment = null; // { type, file } actually sent to the model this turn
       if (attachment) {
         userMsg.attachmentType = attachment.type;
