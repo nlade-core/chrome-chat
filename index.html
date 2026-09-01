@@ -1959,7 +1959,7 @@
           if (isShown()) chatNote.textContent = 'Generating…';
         }
         const content = [];
-        if (urlContext) content.push({ type: 'text', value: '[Fetched from ' + urlContext.label + ']\n' + urlContext.text });
+        if (urlContext) content.push({ type: 'text', value: 'The following was automatically fetched for you from ' + urlContext.label + ' and stays part of this conversation from here on -- you can refer back to it in later replies without it being repeated.\n\n' + urlContext.text });
         if (text) content.push({ type: 'text', value: text });
         if (modelAttachment) content.push({ type: modelAttachment.type, value: modelAttachment.file });
         await streamReply(threadId, [{ role: 'user', content }], sessionTiming);
