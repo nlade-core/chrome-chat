@@ -639,13 +639,30 @@
       if (activeThreadId !== null || prewarm) return;
       checkLandingDownloadNotice();
       if (modelAvailability !== 'available') return;
+      // Real session setup can take a genuinely long time on a cold start --
+      // leaving the landing screen completely silent for that whole wait
+      // looks exactly like the page has frozen. This is deliberately a
+      // plain, low-key note (not a spinner or progress bar): there's no
+      // real progress signal to show here, unlike an actual model download.
+      chatNote.textContent = 'Preparing the model…';
       const startedAt = performance.now();
       const promise = LanguageModel.create({
         initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }],
         expectedInputs: [{ type: 'text' }, { type: 'image' }, { type: 'audio' }],
       }).then((session) => ({ session, createMs: Math.round(performance.now() - startedAt) }));
       prewarm = { promise };
-      promise.catch(() => { prewarm = null; }); // failed -- sendText's own fallback path will just create fresh at send time
+      promise.then(
+        () => {
+          // Only clear if still landing and nothing else has since taken
+          // over the note -- a message sent in the meantime already owns
+          // it for a more specific reason (claiming this same prewarm).
+          if (activeThreadId === null && chatNote.textContent === 'Preparing the model…') chatNote.textContent = '';
+        },
+        () => {
+          prewarm = null; // failed -- sendText's own fallback path will just create fresh at send time
+          if (activeThreadId === null && chatNote.textContent === 'Preparing the model…') chatNote.textContent = '';
+        }
+      );
     }
     // A pre-warmed session belongs to whichever brand-new chat gets sent
     // next -- if the visitor instead opens a real, different thread, it's
@@ -1580,7 +1597,16 @@
       // Fixes "doesn't save unless it runs through": that used to only ever
       // happen once, at the very end of the whole exchange.
       persistThread(threadId);
-      if (isShown()) { stickToBottom = true; renderChat(); chatNote.textContent = 'Generating…'; }
+      // Note deliberately doesn't say "Generating…" yet if a session still
+      // needs to be claimed/created below -- session setup can take a real,
+      // noticeable amount of time on a cold start, and claiming it here
+      // used to leave the note reading "Generating…" for that entire wait,
+      // making the model look absurdly slow to reply when it hadn't
+      // actually started yet.
+      if (isShown()) {
+        stickToBottom = true; renderChat();
+        chatNote.textContent = conv.session ? 'Generating…' : 'Preparing the model…';
+      }
 
       let sessionTiming = null; // only set if THIS call actually created/adopted the session -- not on a continuing turn that reuses an existing one
       try {
@@ -1589,6 +1615,7 @@
             const { session, createMs } = await claimedPrewarm.promise;
             conv.session = session;
             sessionTiming = { createMs, prewarmed: true };
+            if (isShown()) chatNote.textContent = 'Generating…';
           } catch { /* prewarm failed -- falls through to the normal path below */ }
         }
         if (!conv.session) {
@@ -1609,6 +1636,7 @@
             },
           });
           sessionTiming = { createMs: Math.round(performance.now() - sessionStartedAt), prewarmed: false };
+          if (isShown()) chatNote.textContent = 'Generating…';
         }
         const content = [];
         if (text) content.push({ type: 'text', value: text });
