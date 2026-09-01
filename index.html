@@ -264,6 +264,8 @@
   .msg-attachment-img { max-width: 100%; max-height: 220px; border-radius: 0.75rem; margin-bottom: 0.5rem; }
   .msg-attachment-audio { width: 100%; margin-bottom: 0.5rem; }
   .msg-attachment-missing { color: var(--muted); font-size: 0.8rem; font-style: italic; margin-bottom: 0.4rem; }
+  .msg-url-context { font-size: 0.78rem; margin-top: 0.35rem; opacity: 0.85; }
+  .msg-url-context a { color: inherit; }
   .send-btn {
     position: absolute; right: 0.5rem; bottom: 0.5rem;
     width: 2rem; height: 2rem; border-radius: 50%;
@@ -328,7 +330,8 @@
       <div id="about-panel">
         <button id="about-close-btn" aria-label="Close">×</button>
         <h2>About chrome-chat</h2>
-        <p>This runs entirely inside your own browser, on your own device. There is no server, no account, no API key, and nothing you type or attach is ever sent anywhere — the model answering you (Gemini Nano) is built into Chrome itself and runs locally.</p>
+        <p>This runs entirely inside your own browser, on your own device. There is no server, no account, no API key, and nothing you type or attach is ever sent to any server of ours — the model answering you (Gemini Nano) is built into Chrome itself and runs locally.</p>
+        <p><strong>One disclosed exception:</strong> if you paste a link to a GitHub repo, a Wikipedia article, or a Hacker News item, chrome-chat fetches that page's public data directly from GitHub's/Wikipedia's/Hacker News's own API (never through any server of ours) so the model can see it. Only the URL you pasted is sent, only to that one service, and only when the link is recognized.</p>
         <p><strong>What's stored, and where:</strong> conversations live in this browser's own <code>localStorage</code>; any attached images or audio live in this browser's own IndexedDB. Both stay on this device — clearing your browser data removes them for good, and nothing here is backed up anywhere else.</p>
         <p><strong>Requirements:</strong> branded Google Chrome (desktop), a recent enough version to support the on-device Prompt API. It won't work in other browsers, or in plain Chromium.</p>
         <p><strong>Fully open source</strong> — every line of what's running is in the public repository linked in the sidebar, nothing hidden.</p>
@@ -358,6 +361,10 @@
             <div class="attachment-chip" id="attachment-chip" style="display:none;">
               <span id="attachment-name"></span>
               <button id="remove-attachment-btn" aria-label="Remove attachment">×</button>
+            </div>
+            <div class="attachment-chip" id="url-context-chip" style="display:none;">
+              <span id="url-context-name"></span>
+              <button id="remove-url-context-btn" aria-label="Remove linked context">×</button>
             </div>
             <div class="composer-box">
               <button class="attach-btn" id="attach-btn" type="button" aria-label="Attach an image or audio clip">📎</button>
@@ -397,6 +404,9 @@
     const attachmentChip = document.getElementById('attachment-chip');
     const attachmentNameEl = document.getElementById('attachment-name');
     const removeAttachmentBtn = document.getElementById('remove-attachment-btn');
+    const urlContextChip = document.getElementById('url-context-chip');
+    const urlContextNameEl = document.getElementById('url-context-name');
+    const removeUrlContextBtn = document.getElementById('remove-url-context-btn');
     const chatNote = document.getElementById('chat-note');
     const hamburgerBtn = document.getElementById('hamburger-btn');
     const summarizeBtn = document.getElementById('summarize-btn');
@@ -833,7 +843,10 @@
             // against a surprise when actually confirming one.
             const editBtn = (!isStreaming && editingIndex === null)
               ? '<div class="msg-actions"><button class="icon-btn edit-btn" data-i="' + i + '">Edit</button></div>' : '';
-            row.innerHTML = '<div class="content"><div class="user-wrap"><div class="bubble">' + renderAttachmentHtml(m) + renderMarkdown(m.content) + '</div>' + editBtn + '</div></div>';
+            const urlCite = m.urlContext
+              ? '<div class="msg-url-context">🔗 <a href="' + escapeHtml(m.urlContext.url) + '" target="_blank" rel="noopener">' + escapeHtml(m.urlContext.label) + '</a></div>'
+              : '';
+            row.innerHTML = '<div class="content"><div class="user-wrap"><div class="bubble">' + renderAttachmentHtml(m) + renderMarkdown(m.content) + urlCite + '</div>' + editBtn + '</div></div>';
           }
         } else {
           const isLastAndStreaming = isStreaming && i === lastIndex;
@@ -1650,6 +1663,107 @@
       attachmentChip.style.display = 'none';
     });
 
+    // Allowlisted open APIs a pasted URL can be auto-fetched from -- v1 is
+    // paste-detection only (see below), not the model deciding on its own
+    // to fetch something; that's the natural next step once this pattern
+    // is proven out. Each entry: regex to spot the URL, the matching public
+    // API endpoint to hit (all three confirmed CORS-open via curl before
+    // building this), and a formatter that turns the JSON response into a
+    // short plain-text block for the model.
+    const URL_SOURCES = [
+      {
+        id: 'github',
+        regex: /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)(?=[\/?#\s]|$)/,
+        label: (m) => m[1] + '/' + m[2],
+        apiUrl: (m) => 'https://api.github.com/repos/' + m[1] + '/' + m[2],
+        format: (json) => [
+          'GitHub repository ' + json.full_name,
+          json.description ? 'Description: ' + json.description : null,
+          'Language: ' + (json.language || 'unspecified'),
+          'Stars: ' + json.stargazers_count + ', Forks: ' + json.forks_count + ', Open issues: ' + json.open_issues_count,
+          json.license ? 'License: ' + json.license.name : null,
+          'URL: ' + json.html_url,
+        ].filter(Boolean).join('\n'),
+      },
+      {
+        id: 'wikipedia',
+        regex: /https:\/\/([a-z]{2,3})\.wikipedia\.org\/wiki\/([^\s?#]+)/,
+        label: (m) => decodeURIComponent(m[2]).replace(/_/g, ' '),
+        apiUrl: (m) => 'https://' + m[1] + '.wikipedia.org/api/rest_v1/page/summary/' + m[2],
+        format: (json) => [
+          'Wikipedia: ' + json.title,
+          json.description ? '(' + json.description + ')' : null,
+          json.extract || null,
+        ].filter(Boolean).join('\n'),
+      },
+      {
+        id: 'hn',
+        regex: /https:\/\/news\.ycombinator\.com\/item\?id=(\d+)/,
+        label: (m) => 'HN #' + m[1],
+        apiUrl: (m) => 'https://hacker-news.firebaseio.com/v0/item/' + m[1] + '.json',
+        format: (json) => [
+          'Hacker News: ' + (json.title || ('item ' + json.id)),
+          json.by ? 'By: ' + json.by : null,
+          json.score != null ? 'Score: ' + json.score : null,
+          json.descendants != null ? 'Comments: ' + json.descendants : null,
+          json.url ? 'Link: ' + json.url : null,
+          json.text ? 'Text: ' + json.text.replace(/<[^>]+>/g, ' ') : null,
+        ].filter(Boolean).join('\n'),
+      },
+    ];
+    function detectUrlSource(text) {
+      if (!text) return null;
+      for (const src of URL_SOURCES) {
+        const m = src.regex.exec(text);
+        if (m) return { src, url: m[0], label: src.label(m), apiUrl: src.apiUrl(m) };
+      }
+      return null;
+    }
+
+    // pendingUrlContext holds the fetched, ready-to-send context; the token
+    // guards against a slow fetch resolving after the visitor has already
+    // edited the URL away or typed a different one in the meantime.
+    let pendingUrlContext = null; // { url, label, text }
+    let urlContextInFlightUrl = null; // the URL currently being fetched, or null
+    let urlContextToken = 0;
+    let urlContextDebounceTimer = null;
+    function clearUrlContext() {
+      pendingUrlContext = null;
+      urlContextChip.style.display = 'none';
+    }
+    removeUrlContextBtn.addEventListener('click', clearUrlContext);
+    async function maybeFetchUrlContext() {
+      const text = chatInput.value;
+      // Already have context queued (or in flight) for this exact URL -- nothing to do.
+      if (pendingUrlContext && text.includes(pendingUrlContext.url)) return;
+      const found = detectUrlSource(text);
+      if (!found) { urlContextInFlightUrl = null; clearUrlContext(); return; }
+      if (found.url === urlContextInFlightUrl) return;
+      if (pendingUrlContext && pendingUrlContext.url === found.url) return;
+      urlContextInFlightUrl = found.url;
+      const myToken = ++urlContextToken;
+      urlContextChip.style.display = 'flex';
+      urlContextNameEl.textContent = 'Fetching ' + found.label + '…';
+      try {
+        const res = await fetch(found.apiUrl);
+        if (myToken !== urlContextToken) return; // stale -- URL changed while this was in flight
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const json = await res.json();
+        const contextText = found.src.format(json);
+        pendingUrlContext = { url: found.url, label: found.label, text: contextText };
+        urlContextNameEl.textContent = '🔗 ' + found.label;
+      } catch (e) {
+        if (myToken !== urlContextToken) return;
+        clearUrlContext();
+      } finally {
+        if (urlContextInFlightUrl === found.url) urlContextInFlightUrl = null;
+      }
+    }
+    chatInput.addEventListener('input', () => {
+      clearTimeout(urlContextDebounceTimer);
+      urlContextDebounceTimer = setTimeout(maybeFetchUrlContext, 500);
+    });
+
     // Shared by a fresh send, edit-and-resend, fork, and regenerate -- takes
     // the exact turn content to send plus the thread id it belongs to
     // (captured by the caller BEFORE this starts, never re-derived from
@@ -1752,7 +1866,7 @@
     // than lazily at the end of generation, which was the root cause of a
     // real, reproduced bug where switching threads mid-reply could corrupt
     // or lose data).
-    async function sendText(text, attachment, carried, targetThreadId) {
+    async function sendText(text, attachment, carried, targetThreadId, urlContext) {
       if ((!text && !attachment && !carried) || !promptOk) return;
       let threadId = targetThreadId;
       let claimedPrewarm = null;
@@ -1775,6 +1889,7 @@
       const isShown = () => activeThreadId === threadId;
       if (isShown()) chatSendBtn.disabled = true;
       const userMsg = { role: 'user', content: text };
+      if (urlContext) userMsg.urlContext = { url: urlContext.url, label: urlContext.label };
       let modelAttachment = null; // { type, file } actually sent to the model this turn
       if (attachment) {
         userMsg.attachmentType = attachment.type;
@@ -1836,6 +1951,7 @@
           if (isShown()) chatNote.textContent = 'Generating…';
         }
         const content = [];
+        if (urlContext) content.push({ type: 'text', value: '[Fetched from ' + urlContext.label + ']\n' + urlContext.text });
         if (text) content.push({ type: 'text', value: text });
         if (modelAttachment) content.push({ type: modelAttachment.type, value: modelAttachment.file });
         await streamReply(threadId, [{ role: 'user', content }], sessionTiming);
@@ -1848,13 +1964,17 @@
     async function sendChat() {
       const text = chatInput.value.trim();
       const attachment = pendingAttachment;
+      const urlContext = pendingUrlContext;
       if ((!text && !attachment) || !promptOk) return;
       chatInput.value = '';
       autoResize();
       pendingAttachment = null;
       attachInput.value = '';
       attachmentChip.style.display = 'none';
-      await sendText(text, attachment);
+      clearTimeout(urlContextDebounceTimer);
+      urlContextInFlightUrl = null;
+      clearUrlContext();
+      await sendText(text, attachment, null, undefined, urlContext);
     }
 
     // Entering edit mode touches nothing but `editingIndex` -- messages,
