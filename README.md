@@ -17,7 +17,7 @@ Built directly on two pages from [`pages-lab-ai`](https://github.com/nlade-core/
 - A warning once a conversation gets close to the model's context limit
 - Delete a saved conversation with a two-click confirmation (no accidental, un-undoable deletes)
 - Rename a saved conversation inline
-- Search saved conversations by title *and* full message content
+- Search saved conversations by title, generated summary, *and* full message content — matches each word in the query independently (so "japan trip" finds a message that says "trip to Japan"), and ranks title/summary matches above content-only ones instead of ordering purely by recency
 - A "scroll to bottom" button that appears once you've scrolled up mid-conversation
 - A brand-new conversation starts with its composer centered in the middle of the screen alongside the greeting, docking to the bottom the instant you send the first message — matching the landing-then-dock pattern common in modern chat interfaces
 - While that landing screen shows, the model's session is silently pre-warmed in the background if it's already known to be available — so your first message doesn't also pay for session setup. If a real download would be needed instead, the landing screen says so upfront rather than staying silent until you send.
@@ -59,6 +59,7 @@ End to end with Playwright, stubbing `window.LanguageModel` (this is an ordinary
 - Editing any message (confirmed on the first message of a multi-turn conversation, not just the last) correctly truncates only what comes after it, shows the right discard count first, and a confirmed resend recreates the session with the true preserved history; Cancel/Escape reverts with zero side effects -- no session destroyed, nothing lost.
 - The context-limit warning fires only once real usage crosses 85% of the window, and clears on a new chat.
 - Delete requires two clicks (confirmed the thread survives the first, is removed on the second) and auto-reverts if left unconfirmed; rename updates and persists, Escape cancels without saving; search matches by stored message content, not just title (confirmed against a renamed thread whose title no longer contained the search term but whose messages still did), and shows a distinct message when nothing matches versus when there's nothing saved at all.
+- Search correctly matches a query whose words appear out of order in the actual text, and matches a thread only via its stored summary; a title match ranks above a summary-only match even when the summary match is far more recent; a query matching only in raw message content still works; clearing the search restores plain recency order.
 - The scroll-to-bottom button appears only once scrolled away from the bottom, and correctly hides itself when switching conversations even if you'd scrolled up in the previous one.
 - Forking leaves the original thread's saved messages and index entry byte-for-byte unchanged; a fork's `forkedFrom`/`forkRoot` are correct, and forking a fork still resolves `forkRoot` back to the true original two levels back, not the intermediate fork. A 3-member family (original + fork + fork-of-a-fork) collapses to one sidebar row with the correct count badge; expanding shows exactly one "Original" and the rest tagged "Fork"; the row highlights as active whenever any member is the open conversation. Renaming a family's root updates the sidebar label live. Deleting a thread with dependent forks warns with the real count first, and — once confirmed — the surviving forks correctly render as a plain standalone row rather than a broken family display.
 
@@ -78,7 +79,7 @@ End to end with Playwright, stubbing `window.LanguageModel` (this is an ordinary
 
 ## Roadmap
 
-**Recently shipped, in order:** conversation forking → multimodal input → durable IndexedDB attachment storage → a real per-thread data-loss/corruption fix for switching threads mid-reply → an idle-session LRU cache → a centered landing composer → landing-screen session pre-warming → generated conversation titles → manual Summarize/Condense + a context-usage meter.
+**Recently shipped, in order:** conversation forking → multimodal input → durable IndexedDB attachment storage → a real per-thread data-loss/corruption fix for switching threads mid-reply → an idle-session LRU cache → a centered landing composer → landing-screen session pre-warming → generated conversation titles → manual Summarize/Condense + a context-usage meter → honest cold-start messaging → multi-word/summary-aware/relevance-ranked search.
 
 **Next candidates, roughly in priority order:**
 
@@ -87,7 +88,7 @@ End to end with Playwright, stubbing `window.LanguageModel` (this is an ordinary
 3. **Theme toggle.** Not designed yet.
 4. **Cross-tab write-locking.** Two tabs open on the same saved conversation can silently overwrite each other's save (a `navigator.locks`-based fix is designed, just not built — see project notes). Low priority for a single-user tool; revisit if it's ever actually hit in practice.
 5. **The original "differentiated" tier, unstarted:** a live zero-network-requests indicator, Pyodide-based tool use, a thinking-mode toggle. All just named candidates so far, none designed.
-6. **Semantic search over saved conversations, parked pending a real API.** Chrome has a proposed on-device Embedding API (generates vector embeddings locally, aimed squarely at semantic search/RAG) — but as of writing it's at "Intent to Prototype," the earliest stage of Chrome's shipping process, not available in any released Chrome build. A separate embedding model via a JS library would work today, but that's a real identity shift for a project whose whole pitch has been "100% Gemini Nano, zero extra dependencies" — worth a deliberate decision, not a quick add. Revisit once Chrome's own API actually ships. A smaller, immediately-available step in the meantime: extend search to also match the `summary` field the Summarize/Condense feature already generates, not just title + raw message content.
+6. **Semantic search over saved conversations, parked pending a real API.** Chrome has a proposed on-device Embedding API (generates vector embeddings locally, aimed squarely at semantic search/RAG) — but as of writing it's at "Intent to Prototype," the earliest stage of Chrome's shipping process, not available in any released Chrome build. A separate embedding model via a JS library would work today, but that's a real identity shift for a project whose whole pitch has been "100% Gemini Nano, zero extra dependencies" — worth a deliberate decision, not a quick add. Revisit once Chrome's own API actually ships. (In the meantime, search already got a cheaper, non-semantic upgrade — see Features above.)
 
 ## License
 
