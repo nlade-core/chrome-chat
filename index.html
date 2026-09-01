@@ -1755,14 +1755,26 @@
       try {
         const res = await fetch(found.apiUrl);
         if (myToken !== urlContextToken) return; // stale -- URL changed while this was in flight
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        if (!res.ok) {
+          const reason = res.status === 403 || res.status === 429 ? 'rate limited, try again in a bit'
+            : res.status === 404 ? 'not found -- check the link'
+            : 'HTTP ' + res.status;
+          throw new Error(reason);
+        }
         const json = await res.json();
         const contextText = found.src.format(json);
         pendingUrlContext = { url: found.url, label: found.label, text: contextText };
         urlContextNameEl.textContent = '🔗 ' + found.label;
       } catch (e) {
         if (myToken !== urlContextToken) return;
-        clearUrlContext();
+        // Previously just hid the chip with no explanation -- a rate limit
+        // or a mistyped link looked identical to "nothing happened".  Shown
+        // instead, then self-dismisses after a few seconds so an ignored
+        // failure doesn't linger forever; the same token guard means this
+        // timeout never clobbers a later, unrelated fetch's own chip.
+        pendingUrlContext = null;
+        urlContextNameEl.textContent = "Couldn't fetch " + found.label + ' (' + (e.message || 'network error') + ')';
+        setTimeout(() => { if (myToken === urlContextToken) clearUrlContext(); }, 4000);
       } finally {
         if (urlContextInFlightUrl === found.url) urlContextInFlightUrl = null;
       }
