@@ -403,9 +403,21 @@
       if (Array.isArray(raw.threads)) return raw.threads; // v2 (or any future version using this same wrapper shape)
       return []; // unrecognized shape -- fail safe rather than crash
     }
-    function saveIndex(list) { localStorage.setItem(INDEX_KEY, JSON.stringify({ version: SCHEMA_VERSION, threads: list })); }
+    // localStorage's quota is small (a handful of MB) and shared across
+    // every key on the origin -- a long history of conversations (now also
+    // carrying generated summaries) can plausibly fill it. Both saves are
+    // wrapped so a QuotaExceededError fails the save quietly rather than
+    // throwing uncaught out of whatever caller (persistThread, renameThread,
+    // the retitle banner, Summarize/Condense) didn't wrap the call itself.
+    function saveIndex(list) {
+      try { localStorage.setItem(INDEX_KEY, JSON.stringify({ version: SCHEMA_VERSION, threads: list })); }
+      catch { /* storage full or unavailable -- in-memory state is still correct, just not saved this time */ }
+    }
     function loadThreadMessages(id) { try { return JSON.parse(localStorage.getItem(threadKey(id))) || []; } catch { return []; } }
-    function saveThreadMessages(id, msgs) { localStorage.setItem(threadKey(id), JSON.stringify(msgs)); }
+    function saveThreadMessages(id, msgs) {
+      try { localStorage.setItem(threadKey(id), JSON.stringify(msgs)); }
+      catch { /* storage full or unavailable -- in-memory state is still correct, just not saved this time */ }
+    }
     // Attachments (images/audio) are binary and can genuinely get large --
     // localStorage is text-only with a small quota, so they live in their own
     // IndexedDB store instead, referenced from a message by attachmentId
@@ -693,7 +705,17 @@
       }
     }
 
-    function escapeHtml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+    // Escapes quotes too, not just angle brackets/ampersands -- escapeHtml's
+    // output is used both as plain text content (where quotes need no
+    // escaping) AND inside quoted HTML attributes, e.g. a thread-rename
+    // input's value="..." -- a title containing a literal " there would
+    // otherwise break out of the attribute and let anything after it be
+    // parsed as new attributes/markup. Confirmed as a real, exploitable gap
+    // before this fix: a thread titled with a literal " followed by
+    // `autofocus onfocus="..."` executed the injected handler on render.
+    function escapeHtml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
     function renderMarkdown(text) { return '<div class="md">' + marked.parse(escapeHtml(text)) + '</div>'; }
     function formatDuration(ms) { return (ms / 1000).toFixed(1) + 's'; }
 
@@ -1486,12 +1508,18 @@
     chatInput.addEventListener('input', autoResize);
 
     attachBtn.addEventListener('click', () => attachInput.click());
+    const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024; // 20MB -- generous for a real photo/audio clip, bounded against an accidental huge file hanging the tab or blowing the IndexedDB write
     attachInput.addEventListener('change', () => {
       const file = attachInput.files[0];
       if (!file) return;
       const type = file.type.startsWith('image/') ? 'image' : file.type.startsWith('audio/') ? 'audio' : null;
       if (!type) {
         chatNote.textContent = 'Only image or audio files can be attached.';
+        attachInput.value = '';
+        return;
+      }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        chatNote.textContent = 'That file is too large to attach (max 20MB).';
         attachInput.value = '';
         return;
       }
