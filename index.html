@@ -534,7 +534,14 @@
     // platform constraint, not something this app controls), but it's used
     // to make the wait honest instead of looking indistinguishable from
     // being stuck.
-    function anyOtherConvStreaming(exceptId) {
+    // Title generation, Summarize, and Condense all create their own
+    // throwaway sessions, deliberately separate from the real conversational
+    // one -- but they still compete for the exact same shared model, so this
+    // counter (incremented/decremented around each of those calls) lets
+    // isModelBusyElsewhere see them too, not just real conversation streams.
+    let throwawaySessionsInFlight = 0;
+    function isModelBusyElsewhere(exceptId) {
+      if (throwawaySessionsInFlight > 0) return true;
       for (const [id, c] of conversations) {
         if (id !== exceptId && c.streaming) return true;
       }
@@ -1083,13 +1090,18 @@
     // prompt, destroyed right after) rather than the real conversational
     // session, so it never pollutes that session's actual context.
     async function generateTitle(text) {
-      const session = await LanguageModel.create({ initialPrompts: [{ role: 'system', content: TITLE_SYSTEM_PROMPT }] });
+      throwawaySessionsInFlight++;
       try {
-        const raw = await session.prompt(text);
-        const cleaned = raw.trim().replace(/^["'“”]+|["'“”]+$/g, '').replace(/[.!?]+$/, '').trim();
-        return cleaned || titleFrom(text);
+        const session = await LanguageModel.create({ initialPrompts: [{ role: 'system', content: TITLE_SYSTEM_PROMPT }] });
+        try {
+          const raw = await session.prompt(text);
+          const cleaned = raw.trim().replace(/^["'“”]+|["'“”]+$/g, '').replace(/[.!?]+$/, '').trim();
+          return cleaned || titleFrom(text);
+        } finally {
+          try { session.destroy(); } catch {}
+        }
       } finally {
-        try { session.destroy(); } catch {}
+        throwawaySessionsInFlight--;
       }
     }
     // Fire-and-forget: replaces a thread's fallback (truncated) title with a
@@ -1129,16 +1141,21 @@
       return messages.map((m) => (m.role === 'user' ? 'User: ' : 'Assistant: ') + m.content).join('\n\n');
     }
     async function generateSummaryAndTitle(transcriptText) {
-      const session = await LanguageModel.create({ initialPrompts: [{ role: 'system', content: SUMMARY_SYSTEM_PROMPT }] });
+      throwawaySessionsInFlight++;
       try {
-        const raw = await session.prompt(transcriptText);
-        const titleMatch = raw.match(/TITLE:\s*(.+)/i);
-        const summaryMatch = raw.match(/SUMMARY:\s*([\s\S]+)/i);
-        const title = titleMatch ? titleMatch[1].trim().replace(/^["'“”]+|["'“”]+$/g, '').replace(/[.!?]+$/, '') : null;
-        const summary = summaryMatch ? summaryMatch[1].trim() : null;
-        return { title, summary };
+        const session = await LanguageModel.create({ initialPrompts: [{ role: 'system', content: SUMMARY_SYSTEM_PROMPT }] });
+        try {
+          const raw = await session.prompt(transcriptText);
+          const titleMatch = raw.match(/TITLE:\s*(.+)/i);
+          const summaryMatch = raw.match(/SUMMARY:\s*([\s\S]+)/i);
+          const title = titleMatch ? titleMatch[1].trim().replace(/^["'“”]+|["'“”]+$/g, '').replace(/[.!?]+$/, '') : null;
+          const summary = summaryMatch ? summaryMatch[1].trim() : null;
+          return { title, summary };
+        } finally {
+          try { session.destroy(); } catch {}
+        }
       } finally {
-        try { session.destroy(); } catch {}
+        throwawaySessionsInFlight--;
       }
     }
     // Keeps the button's label/enabled state/tooltip in sync with whatever
@@ -1503,7 +1520,7 @@
       conv.messages.push(assistantMsg);
       conv.streaming = true;
       conv.abortController = new AbortController();
-      const wasQueued = anyOtherConvStreaming(threadId);
+      const wasQueued = isModelBusyElsewhere(threadId);
       if (isShown()) {
         chatSendBtn.style.display = 'none';
         chatStopBtn.style.display = 'flex';
