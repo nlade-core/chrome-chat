@@ -330,7 +330,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-01 13:38 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-01 14:46 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -1794,14 +1794,30 @@
     // like a manually-picked file would, so it's both visible in the chat
     // and handed to the model as real multimodal input, not just described.
     const WIKI_IMAGE_SLASH_PREFIX = '/wiki image ';
+    // Only ever auto-attach images actually hosted on Wikimedia Commons --
+    // Commons' own policy explicitly forbids hosting fair-use-only media,
+    // so a Commons URL is a real, checkable guarantee of a freely-licensed
+    // image. Some images used on an article (logos, posters, screenshots)
+    // are instead hosted locally on this specific wiki precisely BECAUSE
+    // they're non-free, permitted only under that wiki's own internal
+    // fair-use policy for encyclopedic use -- that doesn't extend to a
+    // third-party app redistributing them, so those are skipped entirely
+    // rather than guessed at. Confirmed real: the Eiffel Tower article's
+    // own media-list mixes both -- its logo is locally-hosted (likely
+    // non-free), its actual lead photo is genuinely Commons-hosted.
+    function isCommonsHosted(item) {
+      const src = item.srcset && item.srcset[0] && item.srcset[0].src;
+      return !!src && src.includes('/wikipedia/commons/');
+    }
     async function fetchWikiLeadImage(title) {
       const res = await fetch('https://en.wikipedia.org/api/rest_v1/page/media-list/' + encodeURIComponent(title.replace(/ /g, '_')));
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const items = data.items || [];
-      const chosen = items.find((it) => it.type === 'image' && it.leadImage) || items.find((it) => it.type === 'image' && it.showInGallery);
+      const candidates = items.filter((it) => it.type === 'image' && isCommonsHosted(it));
+      const chosen = candidates.find((it) => it.leadImage) || candidates.find((it) => it.showInGallery);
       const entry = chosen && chosen.srcset && chosen.srcset[0];
-      if (!entry) throw new Error('no image found for this article');
+      if (!entry) throw new Error('no freely-licensed (Commons) image found for this article');
       // Always use the exact URL media-list hands back -- confirmed live
       // that hand-constructing a different width (e.g. swapping in "200px-")
       // returns a Wikimedia error page, not an image; only specific
