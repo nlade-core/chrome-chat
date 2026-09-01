@@ -330,7 +330,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-01 11:03 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-01 11:28 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -1749,14 +1749,37 @@
     // it's what Wikipedia's own search box actually falls back to once you
     // hit Enter/Search, not just the suggestion dropdown.
     const WIKI_SLASH_PREFIX = '/wiki ';
-    async function resolveWikiSearch(query) {
-      const res = await fetch('https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=' + encodeURIComponent(query) + '&srlimit=1&format=json&origin=*');
+    // /wiki full <topic> -- same resolution, but fetches the full plain-text
+    // article (via the Action API's `extracts` prop) instead of the short
+    // REST summary, for when the summary genuinely isn't enough. Checked
+    // before the plain prefix below since "/wiki full x" also starts with
+    // "/wiki " -- the fuller prefix has to win the match.
+    const WIKI_FULL_SLASH_PREFIX = '/wiki full ';
+    // A full article can run 40,000+ characters (confirmed: Eiffel Tower's
+    // plain-text extract is ~45,000) -- nowhere close to fitting a small
+    // on-device model's context window alongside actual conversation.
+    // Capped and the truncation disclosed rather than silently cut off.
+    const MAX_FULL_ARTICLE_CHARS = 8000;
+    async function resolveWikiCandidates(query, limit) {
+      const res = await fetch('https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=' + encodeURIComponent(query) + '&srlimit=' + limit + '&format=json&origin=*');
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const results = (data.query && data.query.search) || [];
-      if (!results.length) return null;
-      const title = results[0].title;
-      return { title, url: 'https://en.wikipedia.org/wiki/' + encodeURIComponent(title.replace(/ /g, '_')) };
+      return results.map((r) => ({ title: r.title, url: 'https://en.wikipedia.org/wiki/' + encodeURIComponent(r.title.replace(/ /g, '_')) }));
+    }
+    async function fetchFullArticleText(title) {
+      const res = await fetch('https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&titles=' + encodeURIComponent(title) + '&format=json&origin=*');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const pages = (data.query && data.query.pages) || {};
+      const page = Object.values(pages)[0];
+      return (page && page.extract) || '';
+    }
+    function formatFullArticle(title, extract) {
+      const truncated = extract.length > MAX_FULL_ARTICLE_CHARS;
+      const body = truncated ? extract.slice(0, MAX_FULL_ARTICLE_CHARS) : extract;
+      return 'Wikipedia (full article): ' + title + '\n' + body
+        + (truncated ? '\n\n[...truncated -- showing the first ' + MAX_FULL_ARTICLE_CHARS + ' of ' + extract.length + ' characters]' : '');
     }
 
     // pendingUrlContext holds the fetched, ready-to-send context; the token
@@ -1785,12 +1808,14 @@
     async function maybeFetchUrlContext() {
       const text = chatInput.value;
       const trimmed = text.trim();
-      if (trimmed.toLowerCase().startsWith(WIKI_SLASH_PREFIX)) {
+      const lower = trimmed.toLowerCase();
+      if (lower.startsWith(WIKI_FULL_SLASH_PREFIX) || lower.startsWith(WIKI_SLASH_PREFIX)) {
         if (pendingUrlContext && pendingUrlContext.matchedText === trimmed) return;
         if (trimmed === urlContextInFlightKey) { await urlContextInFlightPromise; return; }
-        const query = trimmed.slice(WIKI_SLASH_PREFIX.length).trim();
+        const fullMode = lower.startsWith(WIKI_FULL_SLASH_PREFIX);
+        const query = trimmed.slice(fullMode ? WIKI_FULL_SLASH_PREFIX.length : WIKI_SLASH_PREFIX.length).trim();
         if (!query) { urlContextInFlightKey = null; urlContextInFlightPromise = null; clearUrlContext(); return; }
-        const p = resolveWikiSlashCommand(trimmed, query);
+        const p = resolveWikiSlashCommand(trimmed, query, fullMode);
         urlContextInFlightKey = trimmed;
         urlContextInFlightPromise = p;
         await p;
@@ -1838,25 +1863,49 @@
         if (urlContextInFlightKey === found.url) { urlContextInFlightKey = null; urlContextInFlightPromise = null; }
       }
     }
-    async function resolveWikiSlashCommand(trimmed, query) {
+    async function resolveWikiSlashCommand(trimmed, query, fullMode) {
       const myToken = ++urlContextToken;
       urlContextChip.style.display = 'flex';
       urlContextNameEl.textContent = 'Searching Wikipedia for "' + query + '"…';
       try {
-        const match = await resolveWikiSearch(query);
+        // A few candidates, not just the top one -- the top full-text match
+        // is sometimes a disambiguation page (e.g. "noting" -> "Note", a
+        // bare list of unrelated things the word could mean) while a
+        // perfectly good real article sits right below it. Walk through in
+        // order and use the first one that isn't a disambiguation page,
+        // rather than either guessing blindly or failing on a fixable case.
+        const candidates = await resolveWikiCandidates(query, 3);
         if (myToken !== urlContextToken) return; // stale -- command changed while this was in flight
-        if (!match) throw new Error('no matching article found');
-        urlContextNameEl.textContent = 'Fetching ' + match.title + '…';
+        if (!candidates.length) throw new Error('no matching article found');
         const wikiSrc = URL_SOURCES.find((s) => s.id === 'wikipedia');
-        const res = await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(match.title.replace(/ /g, '_')));
-        if (myToken !== urlContextToken) return;
-        if (!res.ok) {
-          const reason = res.status === 403 || res.status === 429 ? 'rate limited, try again in a bit' : 'HTTP ' + res.status;
-          throw new Error(reason);
+        let resolved = null;
+        let lastDisambiguationTitle = null;
+        for (const candidate of candidates) {
+          urlContextNameEl.textContent = 'Fetching ' + candidate.title + '…';
+          const res = await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(candidate.title.replace(/ /g, '_')));
+          if (myToken !== urlContextToken) return;
+          if (!res.ok) {
+            const reason = res.status === 403 || res.status === 429 ? 'rate limited, try again in a bit' : 'HTTP ' + res.status;
+            throw new Error(reason);
+          }
+          const json = await res.json();
+          if (json.type === 'disambiguation') { lastDisambiguationTitle = candidate.title; continue; }
+          resolved = { candidate, json };
+          break;
         }
-        const json = await res.json();
-        pendingUrlContext = { url: match.url, label: match.title, text: wikiSrc.format(json), matchedText: trimmed };
-        urlContextNameEl.textContent = '🔗 ' + match.title;
+        if (!resolved) throw new Error('only found a disambiguation page ("' + lastDisambiguationTitle + '") -- try being more specific');
+        let contextText;
+        if (fullMode) {
+          urlContextNameEl.textContent = 'Fetching full article: ' + resolved.candidate.title + '…';
+          const extract = await fetchFullArticleText(resolved.candidate.title);
+          if (myToken !== urlContextToken) return;
+          contextText = formatFullArticle(resolved.candidate.title, extract);
+        } else {
+          contextText = wikiSrc.format(resolved.json);
+        }
+        const label = resolved.candidate.title + (fullMode ? ' (full article)' : '');
+        pendingUrlContext = { url: resolved.candidate.url, label, text: contextText, matchedText: trimmed };
+        urlContextNameEl.textContent = '🔗 ' + label;
       } catch (e) {
         if (myToken !== urlContextToken) return;
         pendingUrlContext = null;
