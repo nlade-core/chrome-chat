@@ -879,11 +879,26 @@
     // Full-content search, not just titles -- titles are only the first ~40
     // characters of a thread's first message, so title-only search would
     // miss most of what a conversation actually contains.
-    function threadMatchesQuery(t, query) {
-      if (!query) return true;
-      const q = query.toLowerCase();
-      if (t.title.toLowerCase().includes(q)) return true;
-      return loadThreadMessages(t.id).some((m) => m.content.toLowerCase().includes(q));
+    // Returns a relevance rank (higher = better match) if every WORD in the
+    // query is found somewhere across the thread's title, generated
+    // summary, or raw message content -- or null if it doesn't match at
+    // all. Splitting into words (rather than requiring the query to appear
+    // as one exact contiguous substring) means "japan trip" correctly
+    // matches a message that actually says "trip to Japan". The rank
+    // reflects which field satisfied the match: a title hit ranks above a
+    // summary hit, which ranks above one found only deep in message
+    // content -- used to order search results by relevance, not just
+    // recency.
+    function threadSearchRank(t, query) {
+      const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      if (!words.length) return 0;
+      const title = t.title.toLowerCase();
+      const summary = (t.summary || '').toLowerCase();
+      const content = loadThreadMessages(t.id).map((m) => m.content.toLowerCase()).join(' ');
+      if (!words.every((w) => title.includes(w) || summary.includes(w) || content.includes(w))) return null;
+      if (words.every((w) => title.includes(w))) return 2;
+      if (words.every((w) => title.includes(w) || summary.includes(w))) return 1;
+      return 0;
     }
 
     function countForksOf(id) {
@@ -937,7 +952,17 @@
 
     function renderThreadList() {
       const allThreads = loadIndex().sort((a, b) => b.updatedAt - a.updatedAt);
-      const threads = allThreads.filter((t) => threadMatchesQuery(t, searchQuery));
+      const query = searchQuery.trim();
+      let threads = allThreads;
+      let rankById = null; // set only while actively searching, threadId -> best rank
+      if (query) {
+        rankById = new Map();
+        allThreads.forEach((t) => {
+          const rank = threadSearchRank(t, query);
+          if (rank !== null) rankById.set(t.id, rank);
+        });
+        threads = allThreads.filter((t) => rankById.has(t.id));
+      }
       if (threads.length) {
         // Group by fork family: everyone sharing the same forkRoot (or, for
         // a never-forked thread, its own id). No member is auto-selected as
@@ -951,9 +976,19 @@
           families.get(rootId).push(t);
         });
         const familyGroups = Array.from(families.entries());
-        // Ordered by each family's most-recently-updated member -- a scan
+        // While actively searching, a family's rank is its best-matching
+        // member's rank -- a highly relevant family shouldn't get buried
+        // below one that's merely more recent. Otherwise (or as a tiebreak),
+        // ordered by each family's most-recently-updated member -- a scan
         // order for the sidebar, not a selection of which member is "main".
-        familyGroups.sort((a, b) => Math.max(...b[1].map((t) => t.updatedAt)) - Math.max(...a[1].map((t) => t.updatedAt)));
+        familyGroups.sort((a, b) => {
+          if (rankById) {
+            const rankA = Math.max(...a[1].map((t) => rankById.get(t.id)));
+            const rankB = Math.max(...b[1].map((t) => rankById.get(t.id)));
+            if (rankB !== rankA) return rankB - rankA;
+          }
+          return Math.max(...b[1].map((t) => t.updatedAt)) - Math.max(...a[1].map((t) => t.updatedAt));
+        });
 
         threadListEl.innerHTML = familyGroups.map(([rootId, members]) => {
           if (members.length === 1) return renderThreadItemRow(members[0], false);
