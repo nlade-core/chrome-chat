@@ -1728,6 +1728,25 @@
       return null;
     }
 
+    // /wiki <topic> -- a slash command for when you don't have (or don't
+    // want to look up) an exact article URL. Resolves free text to a real
+    // article via Wikipedia's own search API (its opensearch endpoint,
+    // confirmed CORS-open the same way via curl -- the `origin=*` param is
+    // what actually turns that on; without it there's no CORS header at
+    // all), then fetches and formats its summary exactly like a pasted
+    // Wikipedia link would, reusing that same formatter. The whole message
+    // is treated as the command -- whatever follows "/wiki " is the query.
+    const WIKI_SLASH_PREFIX = '/wiki ';
+    async function resolveWikiSearch(query) {
+      const res = await fetch('https://en.wikipedia.org/w/api.php?action=opensearch&search=' + encodeURIComponent(query) + '&limit=1&namespace=0&format=json&origin=*');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const titles = data[1] || [];
+      const urls = data[3] || [];
+      if (!titles.length) return null;
+      return { title: titles[0], url: urls[0] };
+    }
+
     // pendingUrlContext holds the fetched, ready-to-send context; the token
     // guards against a slow fetch resolving after the visitor has already
     // edited the URL away or typed a different one in the meantime.
@@ -1742,6 +1761,11 @@
     removeUrlContextBtn.addEventListener('click', clearUrlContext);
     async function maybeFetchUrlContext() {
       const text = chatInput.value;
+      const trimmed = text.trim();
+      if (trimmed.toLowerCase().startsWith(WIKI_SLASH_PREFIX)) {
+        await maybeResolveWikiSlashCommand(trimmed);
+        return;
+      }
       // Already have context queued (or in flight) for this exact URL -- nothing to do.
       if (pendingUrlContext && text.includes(pendingUrlContext.url)) return;
       const found = detectUrlSource(text);
@@ -1777,6 +1801,39 @@
         setTimeout(() => { if (myToken === urlContextToken) clearUrlContext(); }, 4000);
       } finally {
         if (urlContextInFlightUrl === found.url) urlContextInFlightUrl = null;
+      }
+    }
+    async function maybeResolveWikiSlashCommand(trimmed) {
+      const query = trimmed.slice(WIKI_SLASH_PREFIX.length).trim();
+      if (!query) { urlContextInFlightUrl = null; clearUrlContext(); return; }
+      if (pendingUrlContext && pendingUrlContext.matchedText === trimmed) return;
+      if (urlContextInFlightUrl === trimmed) return;
+      urlContextInFlightUrl = trimmed;
+      const myToken = ++urlContextToken;
+      urlContextChip.style.display = 'flex';
+      urlContextNameEl.textContent = 'Searching Wikipedia for "' + query + '"…';
+      try {
+        const match = await resolveWikiSearch(query);
+        if (myToken !== urlContextToken) return; // stale -- command changed while this was in flight
+        if (!match) throw new Error('no matching article found');
+        urlContextNameEl.textContent = 'Fetching ' + match.title + '…';
+        const wikiSrc = URL_SOURCES.find((s) => s.id === 'wikipedia');
+        const res = await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(match.title.replace(/ /g, '_')));
+        if (myToken !== urlContextToken) return;
+        if (!res.ok) {
+          const reason = res.status === 403 || res.status === 429 ? 'rate limited, try again in a bit' : 'HTTP ' + res.status;
+          throw new Error(reason);
+        }
+        const json = await res.json();
+        pendingUrlContext = { url: match.url, label: match.title, text: wikiSrc.format(json), matchedText: trimmed };
+        urlContextNameEl.textContent = '🔗 ' + match.title;
+      } catch (e) {
+        if (myToken !== urlContextToken) return;
+        pendingUrlContext = null;
+        urlContextNameEl.textContent = "Couldn't find that on Wikipedia (" + (e.message || 'network error') + ')';
+        setTimeout(() => { if (myToken === urlContextToken) clearUrlContext(); }, 4000);
+      } finally {
+        if (urlContextInFlightUrl === trimmed) urlContextInFlightUrl = null;
       }
     }
     chatInput.addEventListener('input', () => {
