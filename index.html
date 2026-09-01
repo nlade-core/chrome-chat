@@ -330,7 +330,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-01.1</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-01 10:38 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -1752,7 +1752,14 @@
     // guards against a slow fetch resolving after the visitor has already
     // edited the URL away or typed a different one in the meantime.
     let pendingUrlContext = null; // { url, label, text }
-    let urlContextInFlightUrl = null; // the URL currently being fetched, or null
+    // Tracks whatever resolution is currently in flight as an actual
+    // awaitable promise, not just a flag -- so a fast Enter (pressed before
+    // the debounce even fires, or while the fetch is still on the wire) can
+    // await the SAME in-progress work instead of either starting a
+    // redundant duplicate or -- the real bug this fixed -- silently sending
+    // with no context at all because pendingUrlContext hadn't been set yet.
+    let urlContextInFlightKey = null; // the URL or slash-command text currently being resolved, or null
+    let urlContextInFlightPromise = null;
     let urlContextToken = 0;
     let urlContextDebounceTimer = null;
     function clearUrlContext() {
@@ -1760,20 +1767,36 @@
       urlContextChip.style.display = 'none';
     }
     removeUrlContextBtn.addEventListener('click', clearUrlContext);
+    // The one entry point for resolving whatever's currently in the
+    // composer -- called on the debounced 'input' timer AND, synchronously
+    // awaited, right before actually sending (see sendChat) so a send can
+    // never race ahead of a resolution that's already started.
     async function maybeFetchUrlContext() {
       const text = chatInput.value;
       const trimmed = text.trim();
       if (trimmed.toLowerCase().startsWith(WIKI_SLASH_PREFIX)) {
-        await maybeResolveWikiSlashCommand(trimmed);
+        if (pendingUrlContext && pendingUrlContext.matchedText === trimmed) return;
+        if (trimmed === urlContextInFlightKey) { await urlContextInFlightPromise; return; }
+        const query = trimmed.slice(WIKI_SLASH_PREFIX.length).trim();
+        if (!query) { urlContextInFlightKey = null; urlContextInFlightPromise = null; clearUrlContext(); return; }
+        const p = resolveWikiSlashCommand(trimmed, query);
+        urlContextInFlightKey = trimmed;
+        urlContextInFlightPromise = p;
+        await p;
         return;
       }
-      // Already have context queued (or in flight) for this exact URL -- nothing to do.
+      // Already have context queued for this exact URL -- nothing to do.
       if (pendingUrlContext && text.includes(pendingUrlContext.url)) return;
       const found = detectUrlSource(text);
-      if (!found) { urlContextInFlightUrl = null; clearUrlContext(); return; }
-      if (found.url === urlContextInFlightUrl) return;
+      if (!found) { urlContextInFlightKey = null; urlContextInFlightPromise = null; clearUrlContext(); return; }
+      if (found.url === urlContextInFlightKey) { await urlContextInFlightPromise; return; }
       if (pendingUrlContext && pendingUrlContext.url === found.url) return;
-      urlContextInFlightUrl = found.url;
+      const p = fetchUrlContext(found);
+      urlContextInFlightKey = found.url;
+      urlContextInFlightPromise = p;
+      await p;
+    }
+    async function fetchUrlContext(found) {
       const myToken = ++urlContextToken;
       urlContextChip.style.display = 'flex';
       urlContextNameEl.textContent = 'Fetching ' + found.label + '…';
@@ -1801,15 +1824,10 @@
         urlContextNameEl.textContent = "Couldn't fetch " + found.label + ' (' + (e.message || 'network error') + ')';
         setTimeout(() => { if (myToken === urlContextToken) clearUrlContext(); }, 4000);
       } finally {
-        if (urlContextInFlightUrl === found.url) urlContextInFlightUrl = null;
+        if (urlContextInFlightKey === found.url) { urlContextInFlightKey = null; urlContextInFlightPromise = null; }
       }
     }
-    async function maybeResolveWikiSlashCommand(trimmed) {
-      const query = trimmed.slice(WIKI_SLASH_PREFIX.length).trim();
-      if (!query) { urlContextInFlightUrl = null; clearUrlContext(); return; }
-      if (pendingUrlContext && pendingUrlContext.matchedText === trimmed) return;
-      if (urlContextInFlightUrl === trimmed) return;
-      urlContextInFlightUrl = trimmed;
+    async function resolveWikiSlashCommand(trimmed, query) {
       const myToken = ++urlContextToken;
       urlContextChip.style.display = 'flex';
       urlContextNameEl.textContent = 'Searching Wikipedia for "' + query + '"…';
@@ -1834,7 +1852,7 @@
         urlContextNameEl.textContent = "Couldn't find that on Wikipedia (" + (e.message || 'network error') + ')';
         setTimeout(() => { if (myToken === urlContextToken) clearUrlContext(); }, 4000);
       } finally {
-        if (urlContextInFlightUrl === trimmed) urlContextInFlightUrl = null;
+        if (urlContextInFlightKey === trimmed) { urlContextInFlightKey = null; urlContextInFlightPromise = null; }
       }
     }
     chatInput.addEventListener('input', () => {
@@ -2039,18 +2057,40 @@
       if (isShown()) chatSendBtn.disabled = false;
     }
 
+    let sendChatGuardActive = false; // blocks a re-entrant Enter/click while resolving a pending link/slash-command below, so a fast double-Enter can't race in
     async function sendChat() {
       const text = chatInput.value.trim();
       const attachment = pendingAttachment;
+      if ((!text && !attachment) || !promptOk || sendChatGuardActive) return;
+      // A pasted link or /wiki command might still be resolving (or not even
+      // have started resolving yet -- the debounce is 500ms, easily beaten
+      // by a fast Enter). Force that resolution to finish here rather than
+      // grabbing whatever pendingUrlContext happens to be right now: that
+      // was the real bug behind "/wiki bonus" sending as a bare, contextless
+      // message the instant Enter was pressed, with the model then honestly
+      // saying it had no Wikipedia access -- because it genuinely hadn't
+      // been given anything.
+      const hadRecognizedSource = text.toLowerCase().startsWith(WIKI_SLASH_PREFIX) || !!detectUrlSource(chatInput.value);
+      sendChatGuardActive = true;
+      try {
+        clearTimeout(urlContextDebounceTimer);
+        await maybeFetchUrlContext();
+      } finally {
+        sendChatGuardActive = false;
+      }
+      if (hadRecognizedSource && !pendingUrlContext) {
+        // Resolution genuinely failed (rate limited, not found, network
+        // error) -- the chip is already showing why. Don't silently send
+        // without the context the visitor was clearly expecting; leave the
+        // text in place so they can retry, wait, or edit it.
+        return;
+      }
       const urlContext = pendingUrlContext;
-      if ((!text && !attachment) || !promptOk) return;
       chatInput.value = '';
       autoResize();
       pendingAttachment = null;
       attachInput.value = '';
       attachmentChip.style.display = 'none';
-      clearTimeout(urlContextDebounceTimer);
-      urlContextInFlightUrl = null;
       clearUrlContext();
       await sendText(text, attachment, null, undefined, urlContext);
     }
