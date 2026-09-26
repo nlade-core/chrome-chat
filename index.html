@@ -1536,6 +1536,23 @@
     // genuinely restarts from the summary -- not the full pre-condensation
     // history alongside it. With no divider present, this is exactly the
     // old plain "system prompt + every message verbatim" behavior.
+    // What the model actually sees for a user turn that came with fetched
+    // context. Shared by a live send AND history replay -- replay used to
+    // push only the bare message text, so after a reload, an idle-session
+    // eviction, or an edit/regenerate the fetched article silently vanished
+    // from the model's view, despite this very preamble promising it "stays
+    // part of this conversation". The /wiki command itself is swapped for
+    // just its query: the model has no idea what "/wiki full" means, and the
+    // literal command text is noise next to the article it produced.
+    function urlContextPreamble(urlContext) {
+      return 'The following was automatically fetched for you from ' + urlContext.label + ' and stays part of this conversation from here on -- you can refer back to it in later replies without it being repeated. '
+        + 'Base your answer on it; if it conflicts with what you remember, trust it, and if it doesn\'t cover the question, say so rather than guessing.\n\n'
+        + urlContext.text;
+    }
+    function modelFacingText(text) {
+      const m = /^\/wiki(?: (?:full|image))? (.+)$/is.exec(text || '');
+      return m ? m[1].trim() : text;
+    }
     function buildInitialPrompts(msgs) {
       let startIdx = 0;
       let priorSummary = null;
@@ -1545,7 +1562,11 @@
       const prompts = [{ role: 'system', content: SYSTEM_PROMPT }];
       if (priorSummary) prompts.push({ role: 'system', content: 'Summary of the conversation so far: ' + priorSummary });
       for (let i = startIdx; i < msgs.length; i++) {
-        prompts.push({ role: msgs[i].role, content: msgs[i].content });
+        const m = msgs[i];
+        const content = m.role === 'user' && m.urlContext && m.urlContext.text
+          ? urlContextPreamble(m.urlContext) + '\n\n' + modelFacingText(m.content)
+          : m.content;
+        prompts.push({ role: m.role, content });
       }
       return prompts;
     }
@@ -1687,6 +1708,12 @@
     // API endpoint to hit (all three confirmed CORS-open via curl before
     // building this), and a formatter that turns the JSON response into a
     // short plain-text block for the model.
+    // Wikimedia's API etiquette asks every client to identify itself. A
+    // browser can't set User-Agent, so this is the documented alternative
+    // (confirmed allowed by both the Action API's and REST API's CORS
+    // preflight). Only sent to *.wikipedia.org -- upload.wikimedia.org image
+    // fetches stay header-free so they don't trigger a preflight.
+    const WIKIMEDIA_HEADERS = { 'Api-User-Agent': 'chrome-chat (https://github.com/nlade-core/chrome-chat)' };
     const URL_SOURCES = [
       {
         id: 'github',
@@ -1704,9 +1731,13 @@
       },
       {
         id: 'wikipedia',
-        regex: /https:\/\/([a-z]{2,3})\.wikipedia\.org\/wiki\/([^\s?#]+)/,
+        // Language subdomains aren't all 2-3 letters ("simple", "zh-yue",
+        // "be-tarask"), and links shared from a phone are the mobile
+        // "xx.m.wikipedia.org" form -- both used to silently not match.
+        regex: /https:\/\/([a-z][a-z-]{1,11})(?:\.m)?\.wikipedia\.org\/wiki\/([^\s?#<>"]+)/,
         label: (m) => decodeURIComponent(m[2]).replace(/_/g, ' '),
         apiUrl: (m) => 'https://' + m[1] + '.wikipedia.org/api/rest_v1/page/summary/' + m[2],
+        headers: WIKIMEDIA_HEADERS,
         format: (json) => [
           'Wikipedia: ' + json.title,
           json.description ? '(' + json.description + ')' : null,
@@ -1728,11 +1759,26 @@
         ].filter(Boolean).join('\n'),
       },
     ];
+    // A link at the end of a sentence ("see https://.../Edinburgh.") used to
+    // capture the full stop as part of the title and 404. Trailing
+    // punctuation is trimmed, and a trailing ")" only when it's unbalanced --
+    // "Python_(programming_language)" is a real title, "(see .../Foo)" isn't.
+    function trimTrailingPunct(url) {
+      let u = url;
+      for (;;) {
+        const before = u;
+        u = u.replace(/[.,;:!?'"]+$/, '');
+        if (u.endsWith(')') && u.split('(').length < u.split(')').length) u = u.slice(0, -1);
+        if (u === before) return u;
+      }
+    }
     function detectUrlSource(text) {
       if (!text) return null;
       for (const src of URL_SOURCES) {
-        const m = src.regex.exec(text);
-        if (m) return { src, url: m[0], label: src.label(m), apiUrl: src.apiUrl(m) };
+        const raw = src.regex.exec(text);
+        if (!raw) continue;
+        const m = src.regex.exec(trimTrailingPunct(raw[0])) || raw;
+        return { src, url: m[0], label: src.label(m), apiUrl: src.apiUrl(m), headers: src.headers };
       }
       return null;
     }
@@ -1768,26 +1814,52 @@
     // on-device model's context window alongside actual conversation.
     // Capped and the truncation disclosed rather than silently cut off.
     const MAX_FULL_ARTICLE_CHARS = 8000;
+    // Same full-text search, but as a `generator` with the `disambiguation`
+    // page prop attached -- so which candidates are disambiguation pages
+    // comes back in the search response itself, instead of fetching each
+    // candidate's summary in turn just to find out (up to 3 extra round
+    // trips on an unlucky query like "noting"). Generator results come back
+    // keyed by page id, unordered; `index` is the search rank.
     async function resolveWikiCandidates(query, limit) {
-      const res = await fetch('https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=' + encodeURIComponent(query) + '&srlimit=' + limit + '&format=json&origin=*');
+      const res = await fetch('https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent(query) + '&gsrlimit=' + limit + '&prop=pageprops&ppprop=disambiguation&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
-      const results = (data.query && data.query.search) || [];
-      return results.map((r) => ({ title: r.title, url: 'https://en.wikipedia.org/wiki/' + encodeURIComponent(r.title.replace(/ /g, '_')) }));
+      const pages = Object.values((data.query && data.query.pages) || {}).sort((a, b) => a.index - b.index);
+      return pages.map((p) => ({
+        title: p.title,
+        url: 'https://en.wikipedia.org/wiki/' + encodeURIComponent(p.title.replace(/ /g, '_')),
+        disambiguation: !!(p.pageprops && 'disambiguation' in p.pageprops),
+      }));
     }
     async function fetchFullArticleText(title) {
-      const res = await fetch('https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&titles=' + encodeURIComponent(title) + '&format=json&origin=*');
+      const res = await fetch('https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&titles=' + encodeURIComponent(title) + '&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const pages = (data.query && data.query.pages) || {};
       const page = Object.values(pages)[0];
       return (page && page.extract) || '';
     }
+    // Everything from the first back-matter heading on is reference lists
+    // and link farms -- no use to the model, and on a short article it was
+    // eating a real share of the character budget. Level-2 headings only
+    // ("== See also ==", not a "=== Notes ===" subsection mid-article).
+    const WIKI_BACK_MATTER = /\n==[ ]*(?:See also|Notes|Notes and references|References|Citations|Sources|Bibliography|Further reading|External links|Footnotes)[ ]*==[ ]*\n[\s\S]*$/i;
     function formatFullArticle(title, extract) {
-      const truncated = extract.length > MAX_FULL_ARTICLE_CHARS;
-      const body = truncated ? extract.slice(0, MAX_FULL_ARTICLE_CHARS) : extract;
+      const text = extract.replace(WIKI_BACK_MATTER, '').trim();
+      const truncated = text.length > MAX_FULL_ARTICLE_CHARS;
+      let body = text;
+      if (truncated) {
+        // Cut on a paragraph break (or failing that, a sentence end) rather
+        // than mid-word -- a half-sentence at the end reads to a small model
+        // as something to complete, not as a cut.
+        body = text.slice(0, MAX_FULL_ARTICLE_CHARS);
+        const para = body.lastIndexOf('\n');
+        const sentence = body.lastIndexOf('. ');
+        const cut = para > MAX_FULL_ARTICLE_CHARS * 0.7 ? para : sentence > MAX_FULL_ARTICLE_CHARS * 0.7 ? sentence + 1 : body.length;
+        body = body.slice(0, cut).trim();
+      }
       return 'Wikipedia (full article): ' + title + '\n' + body
-        + (truncated ? '\n\n[...truncated -- showing the first ' + MAX_FULL_ARTICLE_CHARS + ' of ' + extract.length + ' characters]' : '');
+        + (truncated ? '\n\n[...truncated -- showing the first ' + body.length + ' of ' + text.length + ' characters, references excluded]' : '');
     }
     // /wiki image <topic> -- same resolution again, but pulls the article's
     // lead photo (via the REST media-list endpoint) and attaches it exactly
@@ -1810,7 +1882,7 @@
       return !!src && src.includes('/wikipedia/commons/');
     }
     async function fetchWikiLeadImage(title) {
-      const res = await fetch('https://en.wikipedia.org/api/rest_v1/page/media-list/' + encodeURIComponent(title.replace(/ /g, '_')));
+      const res = await fetch('https://en.wikipedia.org/api/rest_v1/page/media-list/' + encodeURIComponent(title.replace(/ /g, '_')), { headers: WIKIMEDIA_HEADERS });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const items = data.items || [];
@@ -1891,7 +1963,7 @@
       urlContextChip.style.display = 'flex';
       urlContextNameEl.textContent = 'Fetching ' + found.label + '…';
       try {
-        const res = await fetch(found.apiUrl);
+        const res = await fetch(found.apiUrl, found.headers ? { headers: found.headers } : undefined);
         if (myToken !== urlContextToken) return; // stale -- URL changed while this was in flight
         if (!res.ok) {
           const reason = res.status === 403 || res.status === 429 ? 'rate limited, try again in a bit'
@@ -1932,22 +2004,16 @@
         if (myToken !== urlContextToken) return; // stale -- command changed while this was in flight
         if (!candidates.length) throw new Error('no matching article found');
         const wikiSrc = URL_SOURCES.find((s) => s.id === 'wikipedia');
-        let resolved = null;
-        let lastDisambiguationTitle = null;
-        for (const candidate of candidates) {
-          urlContextNameEl.textContent = 'Fetching ' + candidate.title + '…';
-          const res = await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(candidate.title.replace(/ /g, '_')));
-          if (myToken !== urlContextToken) return;
-          if (!res.ok) {
-            const reason = res.status === 403 || res.status === 429 ? 'rate limited, try again in a bit' : 'HTTP ' + res.status;
-            throw new Error(reason);
-          }
-          const json = await res.json();
-          if (json.type === 'disambiguation') { lastDisambiguationTitle = candidate.title; continue; }
-          resolved = { candidate, json };
-          break;
+        const candidate = candidates.find((c) => !c.disambiguation);
+        if (!candidate) throw new Error('only found a disambiguation page ("' + candidates[0].title + '") -- try being more specific');
+        urlContextNameEl.textContent = 'Fetching ' + candidate.title + '…';
+        const res = await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(candidate.title.replace(/ /g, '_')), { headers: WIKIMEDIA_HEADERS });
+        if (myToken !== urlContextToken) return;
+        if (!res.ok) {
+          const reason = res.status === 403 || res.status === 429 ? 'rate limited, try again in a bit' : 'HTTP ' + res.status;
+          throw new Error(reason);
         }
-        if (!resolved) throw new Error('only found a disambiguation page ("' + lastDisambiguationTitle + '") -- try being more specific');
+        const resolved = { candidate, json: await res.json() };
 
         if (mode === 'image') {
           urlContextNameEl.textContent = 'Fetching image: ' + resolved.candidate.title + '…';
@@ -2181,8 +2247,8 @@
           if (isShown()) chatNote.textContent = 'Generating…';
         }
         const content = [];
-        if (urlContext) content.push({ type: 'text', value: 'The following was automatically fetched for you from ' + urlContext.label + ' and stays part of this conversation from here on -- you can refer back to it in later replies without it being repeated.\n\n' + urlContext.text });
-        if (text) content.push({ type: 'text', value: text });
+        if (urlContext) content.push({ type: 'text', value: urlContextPreamble(urlContext) });
+        if (text) content.push({ type: 'text', value: urlContext ? modelFacingText(text) : text });
         if (modelAttachment) content.push({ type: modelAttachment.type, value: modelAttachment.file });
         await streamReply(threadId, [{ role: 'user', content }], sessionTiming);
       } catch (e) {
