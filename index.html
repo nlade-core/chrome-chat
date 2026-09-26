@@ -1955,9 +1955,9 @@
       const other = hopFrom || otherEdition(lang);
       const [exact, fulltext, otherExact, hopFull] = await Promise.all([
         wikiSearch(lang, query, 1, 'nearmatch'),
-        hopFrom ? [] : wikiSearch(lang, query, limit),
+        hopFrom ? [] : wikiSearch(lang, query, Math.max(limit, 10)),
         WIKI_LANGS[other] ? wikiSearch(other, query, 1, 'nearmatch', lang, true) : [],
-        hopFrom ? wikiSearch(hopFrom, query, limit, null, lang) : [],
+        hopFrom ? wikiSearch(hopFrom, query, Math.max(limit, 10), null, lang) : [],
       ]);
       const seen = new Set();
       const key = (c) => c.lang + ':' + c.title;
@@ -1968,6 +1968,35 @@
       // DOESN'T link back exists only in that language -- used as-is and
       // labelled, since an answer from the other edition beats no answer,
       // and the gap itself is worth seeing.
+      // Questions: full-text ranks by the question's words, not its subject --
+      // "what is the economy of edinburgh based on" ranked "Market economy"
+      // above "Edinburgh" (confirmed live). A candidate whose own title
+      // appears in the query is the subject, so those go first (after an
+      // exact match), keeping search's own order among them -- NOT longest
+      // first, which picked "La Tour Eiffel" (a different article) for
+      // "...de la tour eiffel" over "Tour Eiffel". Parenthetical qualifiers
+      // and accents are ignored; a hop candidate is judged by its
+      // source-language title. Full-text asks for 10 rows (same request) so
+      // the subject is in range: "is montmartre worth visiting" had
+      // Montmartre outside the top 4.
+      const norm = (t) => ' ' + t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s*\(.*?\)/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim() + ' ';
+      const q = norm(query);
+      const inQuery = (c) => { const t = norm(c.via || c.title); return t.trim() && q.includes(t) ? 1 : 0; };
+      const nExact = exact.length;
+      const rest = merged.slice(nExact).map((c, i) => ({ c, i, w: inQuery(c) }))
+        .sort((x, y) => (y.w - x.w) || (x.i - y.i)).map((x) => x.c);
+      merged.splice(nExact, merged.length - nExact, ...rest);
+      // Still no subject in sight: full-text needs every word to appear, so
+      // "is montmartre worth visiting" (31 hits, none of them Montmartre --
+      // the article never says "worth visiting") returned Barbara La Marr.
+      // Try the question's longest content words as exact titles, in
+      // parallel, only in this case; longest word's hit first.
+      if (!nExact && !merged.some((c) => !c.disambiguation && inQuery(c))) {
+        const words = queryTerms(WIKI_LANGS[lang] ? lang : 'en', query, '').filter((w) => w.length >= 4).sort((x, y) => y.length - x.length).slice(0, 3);
+        const hits = (await Promise.all(words.map((w) => wikiSearch(lang, w, 1, 'nearmatch').catch(() => [])))).flat().filter((c) => !c.disambiguation);
+        const fresh = hits.filter((c) => !seen.has(key(c)) && seen.add(key(c)));
+        merged.unshift(...fresh);
+      }
       if (!merged.some((c) => !c.disambiguation)) {
         const more = await wikiSearch(other, query, limit, null, lang, true);
         merged.push(...more.filter((c) => !seen.has(key(c)) && seen.add(key(c))));
@@ -2391,7 +2420,7 @@
         for (const sct of scored.slice(0, 2)) {
           if (budget < 400) break;
           const body = cutAtBoundary(sct.body, budget);
-          picked.push({ ...sct, i: unseen[sct.i - 1].i, body, strong: sct.headingHit });
+          picked.push({ ...sct, i: unseen[sct.i - 1].i, body, strong: scored[0].headingHit });
           budget -= body.length;
         }
         return picked.sort((a, b) => a.i - b.i);
@@ -2485,8 +2514,13 @@
       const trimmed = text.trim();
       const cmd = parseWikiCommand(trimmed);
       if (cmd) {
-        if (pendingUrlContext && pendingUrlContext.matchedText === trimmed) return;
-        if (trimmed === urlContextInFlightKey) { await urlContextInFlightPromise; return; }
+        const waited = trimmed === urlContextInFlightKey;
+        if (waited) await urlContextInFlightPromise;
+        if (pendingUrlContext && pendingUrlContext.matchedText === trimmed) {
+          if (atSend && pendingUrlContext.question && !pendingUrlContext.sectionsDecided) await enrichWithQuestionSections(urlContextToken, true);
+          return;
+        }
+        if (waited) return;
         const p = resolveWikiSlashCommand(trimmed, cmd);
         urlContextInFlightKey = trimmed;
         urlContextInFlightPromise = p;
@@ -2598,6 +2632,32 @@
       if (urlContextAltsEl.childNodes.length) urlContextAltsEl.append(' · ');
       urlContextAltsEl.append(btn);
     }
+    // "/wiki how tall is the eiffel tower" -- the summary is the quick pull,
+    // but the specific answer usually lives further in (Données techniques,
+    // not the lead). So a /wiki question gets the summary PLUS the section
+    // that answers it, in the same turn, chosen exactly like a follow-up:
+    // a heading match instantly while typing; otherwise the model picks from
+    // the section titles at send. A bare topic ("/wiki edinburgh") adds
+    // nothing -- no discriminating words, not a question. The added section
+    // shows up as "== Heading ==" in the fetched text, so later follow-ups
+    // treat it as already seen.
+    async function enrichWithQuestionSections(myToken, atSend) {
+      const ctx = pendingUrlContext;
+      const art = ctx && ctx.question && articleFromUrl(ctx.url);
+      if (!art) return;
+      let picked = [];
+      try {
+        picked = await pickFollowupSections({ ...art, url: ctx.url, seen: new Set() }, ctx.question, atSend && {
+          onModelPick() { if (pendingUrlContext === ctx) urlContextNameEl.textContent = '📖 Finding the part of ' + art.title + ' that answers this…'; },
+        });
+      } catch { picked = []; }
+      if (myToken !== urlContextToken || pendingUrlContext !== ctx) return;
+      // Weak or no match while typing -> decide again at send, with the model.
+      ctx.sectionsDecided = atSend || (picked.length > 0 && picked.every((sct) => sct.strong));
+      ctx.text = ctx.baseText + picked.map((sct) => '\n\n== ' + sct.heading + ' ==\n' + sct.body).join('');
+      ctx.label = ctx.baseLabel + (picked.length ? ' + ' + picked.map((sct) => sct.heading).join(', ') : '');
+      urlContextNameEl.textContent = '🔗 ' + ctx.label;
+    }
     async function resolveWikiSlashCommand(trimmed, rawCmd, forcedCandidate) {
       const detected = detectLang(rawCmd.query);
       const cmd = { ...rawCmd, lang: rawCmd.lang || (detected && WIKI_LANGS[detected] ? detected : 'en') };
@@ -2664,6 +2724,10 @@
           }
           pendingUrlContext = { url: resolved.candidate.url, label, text: contextText, matchedText: trimmed, ...wikiRevisionMeta(resolved.json) };
           urlContextNameEl.textContent = '🔗 ' + label;
+          if (mode === 'summary') {
+            Object.assign(pendingUrlContext, { question: query, baseText: contextText, baseLabel: label });
+            await enrichWithQuestionSections(myToken, false);
+          }
         }
         if (!forcedCandidate) showWikiAlternatives(alternatives, trimmed, cmd);
         prefetchArticle(resolved.candidate.url);
