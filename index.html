@@ -1575,7 +1575,7 @@
     // part of this conversation". The /wiki command itself is swapped for
     // just its query: the model has no idea what "/wiki full" means, and the
     // literal command text is noise next to the article it produced.
-    function urlContextPreamble(urlContext) {
+    function urlContextPreamble(urlContext, userText) {
       return 'The following was automatically fetched for you from ' + urlContext.label + ' and stays part of this conversation from here on -- you can refer back to it in later replies without it being repeated. '
         + 'Base your answer on it; if it conflicts with what you remember, trust it, and if it doesn\'t cover the question, say so rather than guessing.'
         // A French article with an English question: say explicitly which
@@ -1583,11 +1583,24 @@
         // source's language mid-reply.
         + (urlContext.lang && urlContext.lang !== 'en' ? ' The source is from ' + languageName(urlContext.lang) + ' Wikipedia and written in ' + languageName(urlContext.lang) + '; reply in the language the user\'s message is written in, translating from the source as needed.' : '')
         + '\n\n'
-        + urlContext.text;
+        + urlContext.text
+        + replyLanguageReminder(urlContext.lang || 'en', userText);
+    }
+    // When the message's language is detectable and differs from the
+    // source's, say so by name, AFTER the source text -- small models weight
+    // what comes last, and the stand-in eval caught an English question
+    // about French Édimbourg answered in French with only the generic
+    // instruction above. Written in the reply language itself.
+    const REPLY_IN = { en: '(The source above is in French. Reply in English.)', fr: '(La source ci-dessus est en anglais. Réponds en français.)' };
+    function replyLanguageReminder(sourceLang, userText) {
+      const want = detectLang(modelFacingText(userText || ''));
+      return want && want !== sourceLang && REPLY_IN[want] ? '\n\n' + REPLY_IN[want] : '';
     }
     function modelFacingText(text) {
       const cmd = parseWikiCommand(text);
-      return cmd ? cmd.query : text;
+      if (!cmd) return text;
+      if (cmd.mode === 'compare') return COMPARE_INSTRUCTION[detectLang(cmd.query) === 'fr' ? 'fr' : 'en'];
+      return cmd.query;
     }
     function buildInitialPrompts(msgs) {
       let startIdx = 0;
@@ -1600,7 +1613,7 @@
       for (let i = startIdx; i < msgs.length; i++) {
         const m = msgs[i];
         const content = m.role === 'user' && m.urlContext && m.urlContext.text
-          ? urlContextPreamble(m.urlContext) + '\n\n' + modelFacingText(m.content)
+          ? urlContextPreamble(m.urlContext, m.content) + '\n\n' + modelFacingText(m.content)
           : m.content;
         prompts.push({ role: m.role, content });
       }
@@ -1895,7 +1908,7 @@
     // "/wiki fullerene" is a plain lookup of "fullerene": the mode word
     // only counts when whitespace follows it.
     function parseWikiCommand(text) {
-      const m = /^\/wiki(?::([a-z][a-z-]{1,11}))?(?:\s+(full|image)(?=\s))?\s+(\S[\s\S]*)$/i.exec((text || '').trim());
+      const m = /^\/wiki(?::([a-z][a-z-]{1,11}))?(?:\s+(full|image|compare)(?=\s))?\s+(\S[\s\S]*)$/i.exec((text || '').trim());
       if (!m) return null;
       return { lang: m[1] ? m[1].toLowerCase() : null, mode: m[2] ? m[2].toLowerCase() : 'summary', query: m[3].trim() };
     }
@@ -1933,14 +1946,55 @@
     async function resolveWikiCandidates(lang, query, limit) {
       const qLang = detectLang(query);
       const hopFrom = qLang && qLang !== lang && WIKI_LANGS[qLang] ? qLang : null;
-      const [exact, fulltext, hopExact, hopFull] = await Promise.all([
+      // The paired edition's exact-title match is always checked too, in
+      // parallel: full-text search almost always returns SOMETHING, so "no
+      // results" alone never catches a named topic that only one edition
+      // has. An exact title elsewhere, with no exact title here, is a far
+      // stronger signal -- it goes straight after the (missing) exact match,
+      // as the counterpart if one is linked, or as-is, labelled, if not.
+      const other = hopFrom || otherEdition(lang);
+      const [exact, fulltext, otherExact, hopFull] = await Promise.all([
         wikiSearch(lang, query, 1, 'nearmatch'),
         hopFrom ? [] : wikiSearch(lang, query, limit),
-        hopFrom ? wikiSearch(hopFrom, query, 1, 'nearmatch', lang) : [],
+        WIKI_LANGS[other] ? wikiSearch(other, query, 1, 'nearmatch', lang, true) : [],
         hopFrom ? wikiSearch(hopFrom, query, limit, null, lang) : [],
       ]);
       const seen = new Set();
-      return [...exact, ...hopExact, ...hopFull, ...fulltext].filter((c) => !seen.has(c.title) && seen.add(c.title));
+      const key = (c) => c.lang + ':' + c.title;
+      const merged = [...exact, ...otherExact, ...hopFull, ...fulltext].filter((c) => !seen.has(key(c)) && seen.add(key(c)));
+      // Finding the article at all: nothing real in the target language ->
+      // search the other edition too. A hit there that links back is just
+      // the target-language article under a different name; one that
+      // DOESN'T link back exists only in that language -- used as-is and
+      // labelled, since an answer from the other edition beats no answer,
+      // and the gap itself is worth seeing.
+      if (!merged.some((c) => !c.disambiguation)) {
+        const more = await wikiSearch(other, query, limit, null, lang, true);
+        merged.push(...more.filter((c) => !seen.has(key(c)) && seen.add(key(c))));
+      }
+      return merged;
+    }
+    // The paired edition for gap-finding and comparison: English <-> French
+    // for now, every other enabled language pairs with English.
+    const otherEdition = (lang) => (lang === 'en' ? 'fr' : 'en');
+    // Size and counterpart of an article in the paired edition, in two
+    // light requests (prop=info gives the page length; langlinks the other
+    // title). Length is wikitext bytes -- templates and references included,
+    // accented French slightly inflated -- so it's a rough coverage signal,
+    // only ever acted on at a clear 1.5x gap.
+    async function fetchCounterpart(lang, title) {
+      const other = otherEdition(lang);
+      const info = async (l, t, extra) => {
+        const res = await fetch(wikiHost(l) + '/w/api.php?action=query&titles=' + encodeURIComponent(t) + '&redirects=1&prop=info' + (extra || '') + '&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        return Object.values((data.query && data.query.pages) || {})[0] || {};
+      };
+      const page = await info(lang, title, '|langlinks&lllang=' + other);
+      const otherTitle = (page.langlinks && page.langlinks[0] && page.langlinks[0]['*']) || null;
+      const out = { lang, title: page.title || title, length: page.length || 0, other, otherTitle, otherLength: 0 };
+      if (otherTitle) out.otherLength = (await info(other, otherTitle)).length || 0;
+      return out;
     }
     // Cheap language guess from function words (plus French accents) --
     // no model, no download, instant, which matters because it runs on
@@ -1960,16 +2014,17 @@
       const fr = count('fr') + (/[éèêëàâçùûüîïôœ]/.test(lower) ? 1 : 0);
       return en > fr ? 'en' : fr > en ? 'fr' : null;
     }
-    async function wikiSearch(lang, query, limit, what, linkTo) {
+    async function wikiSearch(lang, query, limit, what, linkTo, keepUnlinked) {
       const res = await fetch(wikiHost(lang) + '/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent(query) + '&gsrlimit=' + limit + (what ? '&gsrwhat=' + what : '') + '&redirects=1&prop=pageprops' + (linkTo ? '|langlinks&lllang=' + linkTo + '&lllimit=max' : '') + '&ppprop=disambiguation&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const pages = Object.values((data.query && data.query.pages) || {}).sort((a, b) => a.index - b.index);
       return pages.map((p) => {
         const disambiguation = !!(p.pageprops && 'disambiguation' in p.pageprops);
-        if (!linkTo) return { title: p.title, url: wikiArticleUrl(lang, p.title), disambiguation };
+        if (!linkTo) return { title: p.title, lang, url: wikiArticleUrl(lang, p.title), disambiguation };
         const link = p.langlinks && p.langlinks[0];
-        return link ? { title: link['*'], url: wikiArticleUrl(linkTo, link['*']), disambiguation, via: p.title, viaLang: lang } : null;
+        if (link) return { title: link['*'], lang: linkTo, url: wikiArticleUrl(linkTo, link['*']), disambiguation, via: p.title, viaLang: lang };
+        return keepUnlinked ? { title: p.title, lang, url: wikiArticleUrl(lang, p.title), disambiguation, missingIn: linkTo } : null;
       }).filter(Boolean);
     }
     async function fetchFullArticleText(lang, title) {
@@ -1985,6 +2040,83 @@
     // eating a real share of the character budget. Level-2 headings only
     // ("== See also ==", not a "=== Notes ===" subsection mid-article).
     const wikiBackMatter = (lang) => new RegExp('\\n==[ ]*(?:' + WIKI_LANGS[lang].backMatter.join('|') + ')[ ]*==[ ]*\\n[\\s\\S]*$', 'i');
+    // /wiki compare <topic>: the same article in both editions, side by side,
+    // for spotting disagreements and gaps. The deterministic part is done
+    // here rather than asked of a small model: sizes, both section lists,
+    // and years dated in one article but never mentioned anywhere in the
+    // other -- each with its sentence, so it's clear WHICH event one
+    // edition covers and the other doesn't. The model then gets the part
+    // that needs reading: facts the two leads state differently.
+    const YEAR_RE = /\b(1[0-9]{3}|20[0-9]{2})\b/g;
+    // Bibliography entries are full of four-digit page numbers ("1966, 238,
+    // 1603-1628") that look exactly like years -- confirmed as false hits on
+    // a real article. Works/publication sections are skipped, and so is any
+    // line with the citation signature "<year>, <volume>, ...".
+    const LIST_SECTION_RE = /publications|works|bibliograph|discograph|filmograph|œuvres|ouvrages|écrits|travaux/i;
+    const CITATION_LINE_RE = /,\s*(?:1[0-9]{3}|20[0-9]{2})\s*,\s*\d/;
+    // Year -> the sentence it's dated in, grouped so one sentence with four
+    // years ("from 1291 to 1314 and from 1333 to 1341") is listed once.
+    function datedSentences(sections) {
+      const byYear = new Map();
+      for (const sct of sections) {
+        if (sct.heading && LIST_SECTION_RE.test(sct.heading)) continue;
+        for (const line of sct.body.split('\n')) {
+          if (CITATION_LINE_RE.test(line)) continue;
+          for (const m of line.matchAll(YEAR_RE)) {
+            if (byYear.has(m[1])) continue;
+            // Whole sentence, so two years in one sentence map to the SAME
+            // string (and group); only an overlong one is windowed.
+            const dot = line.lastIndexOf('. ', m.index);
+            const start = dot >= 0 ? dot + 2 : 0;
+            const stop = line.indexOf('. ', m.index);
+            let sentence = line.slice(start, stop < 0 ? line.length : stop + 1).trim();
+            if (sentence.length > 320) {
+              const from = Math.max(0, m.index - start - 150);
+              sentence = '…' + sentence.slice(from, from + 300).trim() + '…';
+            }
+            byYear.set(m[1], sentence);
+          }
+        }
+      }
+      return byYear;
+    }
+    function yearsOnlyIn(x, y) {
+      const bySentence = new Map();
+      for (const [yr, sentence] of [...x].sort((p, q) => p[0] - q[0])) {
+        if (y.has(yr)) continue;
+        if (!bySentence.has(sentence)) bySentence.set(sentence, []);
+        bySentence.get(sentence).push(yr);
+      }
+      return [...bySentence].slice(0, 8).map(([sentence, yrs]) => '- ' + yrs.join(', ') + ': ' + sentence).join('\n') || '(none)';
+    }
+    async function buildComparison(lang, title) {
+      const cp = await fetchCounterpart(lang, title);
+      const [a, b] = await Promise.all([getArticleSections(lang, cp.title), cp.otherTitle ? getArticleSections(cp.other, cp.otherTitle) : null]);
+      const name = languageName(lang), otherName = languageName(cp.other);
+      const heads = (secs) => secs.slice(1).map((sct) => sct.heading).slice(0, 50).join('; ') || '(no sections)';
+      const partA = '== ' + name + ' lead ==\n' + cutAtBoundary(a[0].body, 1200) + '\n\n== ' + name + ' sections ==\n' + heads(a);
+      if (!b) {
+        return {
+          label: cp.title + ' -- no ' + cp.other + ' article',
+          text: 'Wikipedia comparison: "' + cp.title + '" has a ' + name + ' Wikipedia article (' + cp.length + ' bytes) but NO ' + otherName + ' Wikipedia article at all -- a coverage gap.\n\n' + partA,
+        };
+      }
+      const yearsA = datedSentences(a), yearsB = datedSentences(b);
+      const onlyIn = yearsOnlyIn;
+      return {
+        label: cp.title + ' ↔ ' + cp.otherTitle + ' (compare)',
+        text: 'Wikipedia comparison: "' + cp.title + '" (' + name + ', ' + cp.length + ' bytes, ' + (a.length - 1) + ' sections) vs "' + cp.otherTitle + '" (' + otherName + ', ' + cp.otherLength + ' bytes, ' + (b.length - 1) + ' sections).\n\n'
+          + partA + '\n\n== ' + otherName + ' lead ==\n' + cutAtBoundary(b[0].body, 1200) + '\n\n== ' + otherName + ' sections ==\n' + heads(b)
+          + '\n\n== Automatic check: years dated in the ' + name + ' article but never mentioned in the ' + otherName + ' one ==\n' + onlyIn(yearsA, yearsB)
+          + '\n\n== Automatic check: years dated in the ' + otherName + ' article but never mentioned in the ' + name + ' one ==\n' + onlyIn(yearsB, yearsA),
+      };
+    }
+    // What the model is asked, in the language the user typed the topic in.
+    const COMPARE_INSTRUCTION = {
+      en: 'Compare the two Wikipedia articles above. Briefly list (1) facts they state differently, quoting both, and (2) topics or dated events one covers that the other seems to lack, using the section lists and automatic checks. Be specific; if you find no disagreement, say so. These are leads for an editor to check, not verdicts.',
+      fr: 'Compare les deux articles Wikipédia ci-dessus. Liste brièvement (1) les faits présentés différemment, en citant les deux, et (2) les sujets ou événements datés traités dans l\'un mais apparemment absents de l\'autre, d\'après les listes de sections et les vérifications automatiques. Sois précis ; si tu ne trouves aucun désaccord, dis-le. Ce sont des pistes à vérifier pour un contributeur, pas des verdicts.',
+    };
+
     // Cut on a paragraph break (or failing that, a sentence end) rather than
     // mid-word -- a half-sentence at the end reads to a small model as
     // something to complete, not as a cut.
@@ -2041,8 +2173,12 @@
         const body = sct.body.toLowerCase();
         const heading = sct.heading.toLowerCase();
         let score = 0;
-        for (const t of terms) score += Math.min(5, body.split(t).length - 1) + (heading.includes(t) ? 5 : 0);
-        return { ...sct, score };
+        let headingHit = false;
+        for (const t of terms) {
+          score += Math.min(5, body.split(t).length - 1);
+          if (heading.includes(t)) { score += 5; headingHit = true; }
+        }
+        return { ...sct, score, headingHit };
       }).filter((sct) => sct.score >= minScore).sort((a, b) => b.score - a.score);
     }
     function formatFullArticle(lang, title, extract, query) {
@@ -2163,7 +2299,7 @@
     // yet. One short, structured call (responseConstraint pins the reply to
     // a single integer), on a throwaway session like title generation, and
     // never on the typing debounce -- that would fire a model call per pause.
-    const QUESTION_RE = /\?\s*$|^(?:who|what|when|where|why|how|which|is|are|was|were|does|did|can|qui|que|quoi|quand|où|pourquoi|comment|quel|quelle|quels|quelles|est-ce)\b/i;
+    const QUESTION_RE = /\?\s*$|^(?:tell me|explain|describe|dis-moi|explique|parle-moi|who|what|when|where|why|how|which|is|are|was|were|does|did|can|qui|que|quoi|quand|où|pourquoi|comment|quel|quelle|quels|quelles|est-ce)\b/i;
     const SECTION_PICK_PROMPT = 'You choose which section of an encyclopedia article is most likely to answer a question. Reply only with the section number, or 0 if none is likely to help.';
     async function modelPickSection(art, question, unseen) {
       const list = unseen.slice(0, 60);
@@ -2173,10 +2309,19 @@
         try {
           const raw = await withTimeout(session.prompt(
             'Article: ' + art.title + '\nQuestion: ' + question + '\nSections:\n' + list.map((sct, k) => (k + 1) + '. ' + sct.heading).join('\n'),
-            { responseConstraint: { type: 'object', properties: { section: { type: 'integer', minimum: 0, maximum: list.length } }, required: ['section'] } }
+            // A bare integer, not {"section": n}: on a local stand-in the
+            // object form took 6-20s per reply vs ~0.1s for the integer,
+            // for the same answer. (Chrome's own constrained decoding may
+            // differ -- still the smaller constraint to satisfy.)
+            { responseConstraint: { type: 'integer', minimum: 0, maximum: list.length } }
           ), 8000);
-          let n;
-          try { n = JSON.parse(raw).section; } catch { n = parseInt((/\d+/.exec(raw) || [])[0], 10); }
+          // Accept {"section": 6}, a bare 6, or "6." -- confirmed with a
+          // local stand-in model that a schema-constrained reply can still
+          // come back as a bare number, which is valid JSON with no
+          // .section, and used to be silently read as "no pick".
+          let n = NaN;
+          try { const v = JSON.parse(raw); n = typeof v === 'number' ? v : v && v.section; } catch {}
+          if (!Number.isInteger(n)) n = parseInt((/\d+/.exec(raw) || [])[0], 10);
           return n >= 1 && n <= list.length ? list[n - 1] : null;
         } finally {
           try { session.destroy(); } catch {}
@@ -2219,6 +2364,17 @@
       }
       return null;
     }
+    // Escalation order, set by the stand-in eval (eval/run.mjs, 15 cases x3
+    // on gemma4:e4b with thinking off): model picks from headings alone were
+    // 45/45 at ~0.1s, cross-language included; word matching is instant and
+    // reliable only when it hits a HEADING; body-only and translated matches
+    // were where the misses came from (cannon -> Lang Siege, not Mons Meg).
+    //   1. same-language heading hit            -> instant, trusted ("strong")
+    //   2. at send, a question                  -> model picks from headings
+    //   3. model has nothing / not at send      -> translated or plain word
+    //      match, whatever it is ("weak" -- re-decided at send)
+    // Each returned section carries `strong`, so a weak preview picked while
+    // typing is re-decided at send rather than reused as-is.
     async function pickFollowupSections(art, question, atSend) {
       const sections = await getArticleSections(art.lang, art.title);
       // Subsection headings appear bare ("Old Town") in a first-N /wiki full
@@ -2226,33 +2382,36 @@
       const isSeen = (sct) => art.seen.has(sct.heading) || art.seen.has(sct.heading.split(' › ').pop());
       const unseen = sections.map((sct, i) => ({ ...sct, i })).slice(1).filter((sct) => !isSeen(sct));
       if (!unseen.length) return [];
-      if (MORE_RE.test(question.trim())) return [{ ...unseen[0], body: cutAtBoundary(unseen[0].body, FOLLOWUP_MAX_CHARS) }];
-      // Question in a different language from the article -> match on its
-      // translation (falls back to the original if no translation pack).
-      // Untranslated cross-language word matching is worse than none:
-      // confirmed live, "economy" against French Édimbourg matched
-      // "Personnalités". So without a translation, skip straight to the
-      // send-time model pick below, which reads headings in any language.
+      if (MORE_RE.test(question.trim())) return [{ ...unseen[0], body: cutAtBoundary(unseen[0].body, FOLLOWUP_MAX_CHARS), strong: true }];
+      const lang = WIKI_LANGS[art.lang] ? art.lang : 'en';
+      const score = (text) => { const terms = queryTerms(lang, text, art.title); return terms.length ? scoreSections([sections[0], ...unseen], terms, FOLLOWUP_MIN_SCORE) : []; };
+      const take = (scored) => {
+        const picked = [];
+        let budget = FOLLOWUP_MAX_CHARS;
+        for (const sct of scored.slice(0, 2)) {
+          if (budget < 400) break;
+          const body = cutAtBoundary(sct.body, budget);
+          picked.push({ ...sct, i: unseen[sct.i - 1].i, body, strong: sct.headingHit });
+          budget -= body.length;
+        }
+        return picked.sort((a, b) => a.i - b.i);
+      };
+      // Untranslated cross-language word matching is worse than none
+      // (confirmed live: "economy" against French Édimbourg -> "Personnalités").
       const qLang = detectLang(question);
       const crossLang = qLang && qLang !== art.lang && WIKI_LANGS[art.lang];
-      const matchText = crossLang ? await translateForMatching(question, qLang, art.lang) : question;
-      const terms = matchText ? queryTerms(WIKI_LANGS[art.lang] ? art.lang : 'en', matchText, art.title) : [];
-      const scored = terms.length ? scoreSections([sections[0], ...unseen], terms, FOLLOWUP_MIN_SCORE) : [];
-      if (!scored.length) {
-        if (!atSend || !QUESTION_RE.test(question.trim())) return [];
+      let scored = crossLang ? [] : score(question);
+      if (scored.length && scored[0].headingHit) return take(scored);
+      if (atSend && QUESTION_RE.test(question.trim())) {
         if (atSend.onModelPick) atSend.onModelPick();
         const hit = await modelPickSection(art, question, unseen);
-        return hit ? [{ ...hit, body: cutAtBoundary(hit.body, FOLLOWUP_MAX_CHARS), picker: 'model' }] : [];
+        if (hit) return [{ ...hit, body: cutAtBoundary(hit.body, FOLLOWUP_MAX_CHARS), picker: 'model', strong: true }];
       }
-      const picked = [];
-      let budget = FOLLOWUP_MAX_CHARS;
-      for (const sct of scored.slice(0, 2)) {
-        if (budget < 400) break;
-        const body = cutAtBoundary(sct.body, budget);
-        picked.push({ ...sct, i: unseen[sct.i - 1].i, body });
-        budget -= body.length;
+      if (crossLang) {
+        const translated = await translateForMatching(question, qLang, art.lang);
+        if (translated) scored = score(translated);
       }
-      return picked.sort((a, b) => a.i - b.i);
+      return take(scored);
     }
     async function resolveFollowupSections(trimmed, art, atSend) {
       const myToken = ++urlContextToken;
@@ -2272,7 +2431,7 @@
         // No revision pin here: extracts is always the current text, so
         // claiming the earlier turn's revision would be wrong.
         pendingUrlContext = {
-          url: art.url, label, lang: art.lang, matchedText: trimmed, followup: true,
+          url: art.url, label, lang: art.lang, matchedText: trimmed, followup: true, strong: picked.every((sct) => sct.strong),
           text: 'Wikipedia' + (art.lang !== 'en' ? ' (' + languageName(art.lang) + ')' : '') + ': ' + art.title + ' -- further sections, relevant to this message'
             + picked.map((sct) => '\n\n== ' + sct.heading + ' ==\n' + sct.body).join(''),
         };
@@ -2340,7 +2499,11 @@
       if (!found) {
         const art = trimmed && !followupDismissed ? openArticle(activeConv()) : null;
         if (!art) { urlContextInFlightKey = null; urlContextInFlightPromise = null; clearUrlContext(); return; }
-        if (pendingUrlContext && pendingUrlContext.matchedText === trimmed) return;
+        // A weak preview (body-only / translated word match, picked while
+        // typing) is NOT final: at send it's re-decided with the model's
+        // help. Reusing it here was the bug that meant the model step never
+        // actually ran in the app.
+        if (pendingUrlContext && pendingUrlContext.matchedText === trimmed && (!atSend || pendingUrlContext.strong)) return;
         const key = 'followup:' + trimmed;
         if (key === urlContextInFlightKey) { await urlContextInFlightPromise; if (!atSend || pendingUrlContext) return; }
         const p = resolveFollowupSections(trimmed, art, atSend);
@@ -2415,6 +2578,26 @@
     // French Wikipedia with no extra syntax, because French words are what
     // French Wikipedia's index can actually match. Anything undetectable or
     // English stays English. /wiki:en and /wiki:fr always win.
+    // Best information from the best language: once the answer's context is
+    // already in place (never delaying it), check the paired edition's size
+    // in the background, and if it's clearly fuller, offer it as one click.
+    // Local topics are often far better covered in their own language.
+    async function offerFullerEdition(myToken, trimmed, cmd, lang, title) {
+      let cp;
+      try { cp = await fetchCounterpart(lang, title); } catch { return; }
+      if (myToken !== urlContextToken || !cp.otherTitle || cp.otherLength < cp.length * 1.5) return;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = 'Fuller in ' + languageName(cp.other);
+      btn.title = languageName(cp.other) + ' article "' + cp.otherTitle + '" is about ' + (cp.otherLength / Math.max(1, cp.length)).toFixed(1) + '× the size -- use it instead';
+      btn.addEventListener('click', () => {
+        const p = resolveWikiSlashCommand(trimmed, cmd, { title: cp.otherTitle, lang: cp.other, url: wikiArticleUrl(cp.other, cp.otherTitle) });
+        urlContextInFlightKey = trimmed;
+        urlContextInFlightPromise = p;
+      });
+      if (urlContextAltsEl.childNodes.length) urlContextAltsEl.append(' · ');
+      urlContextAltsEl.append(btn);
+    }
     async function resolveWikiSlashCommand(trimmed, rawCmd, forcedCandidate) {
       const detected = detectLang(rawCmd.query);
       const cmd = { ...rawCmd, lang: rawCmd.lang || (detected && WIKI_LANGS[detected] ? detected : 'en') };
@@ -2437,10 +2620,13 @@
         const wikiSrc = URL_SOURCES.find((s) => s.id === 'wikipedia');
         const candidate = candidates.find((c) => !c.disambiguation);
         if (!candidate) throw new Error('only found a disambiguation page ("' + candidates[0].title + '") -- try being more specific');
-        const langTag = (lang !== 'en' ? ' (' + lang + ')' : '') + (candidate.via && candidate.via !== candidate.title ? ' via "' + candidate.via + '"' : '');
+        const cLang = candidate.lang || lang; // may differ: a hop, a gap fallback, or a "fuller in" pick
+        const langTag = (cLang !== 'en' ? ' (' + cLang + ')' : '')
+          + (candidate.via && candidate.via !== candidate.title ? ' via "' + candidate.via + '"' : '')
+          + (candidate.missingIn ? ' -- no ' + candidate.missingIn + ' article' : '');
         const alternatives = candidates.filter((c) => !c.disambiguation && c !== candidate).slice(0, 2);
         urlContextNameEl.textContent = 'Fetching ' + candidate.title + '…';
-        const res = await fetch(wikiHost(lang) + '/api/rest_v1/page/summary/' + encodeURIComponent(candidate.title.replace(/ /g, '_')), { headers: WIKIMEDIA_HEADERS });
+        const res = await fetch(wikiHost(cLang) + '/api/rest_v1/page/summary/' + encodeURIComponent(candidate.title.replace(/ /g, '_')), { headers: WIKIMEDIA_HEADERS });
         if (myToken !== urlContextToken) return;
         if (!res.ok) {
           const reason = res.status === 403 || res.status === 429 ? 'rate limited, try again in a bit' : 'HTTP ' + res.status;
@@ -2450,7 +2636,7 @@
 
         if (mode === 'image') {
           urlContextNameEl.textContent = 'Fetching image: ' + resolved.candidate.title + '…';
-          const { blob, title: imageTitle } = await fetchWikiLeadImage(lang, resolved.candidate.title);
+          const { blob, title: imageTitle } = await fetchWikiLeadImage(cLang, resolved.candidate.title);
           if (myToken !== urlContextToken) return;
           pendingAttachment = { file: blob, type: 'image' };
           wikiImageOwnsAttachment = true;
@@ -2461,20 +2647,27 @@
           urlContextNameEl.textContent = '🔗 ' + label;
         } else {
           let contextText;
+          let label = resolved.candidate.title + langTag + (mode === 'full' ? ' (full article)' : '');
           if (mode === 'full') {
             urlContextNameEl.textContent = 'Fetching full article: ' + resolved.candidate.title + '…';
-            const extract = await fetchFullArticleText(lang, resolved.candidate.title);
+            const extract = await fetchFullArticleText(cLang, resolved.candidate.title);
             if (myToken !== urlContextToken) return;
-            contextText = formatFullArticle(lang, resolved.candidate.title, extract, query);
+            contextText = formatFullArticle(cLang, resolved.candidate.title, extract, query);
+          } else if (mode === 'compare') {
+            urlContextNameEl.textContent = 'Comparing ' + resolved.candidate.title + ' across ' + languageName(cLang) + ' and ' + languageName(otherEdition(cLang)) + ' Wikipedia…';
+            const cmp = await buildComparison(cLang, resolved.candidate.title);
+            if (myToken !== urlContextToken) return;
+            contextText = cmp.text;
+            label = cmp.label;
           } else {
             contextText = wikiSrc.format(resolved.json);
           }
-          const label = resolved.candidate.title + langTag + (mode === 'full' ? ' (full article)' : '');
           pendingUrlContext = { url: resolved.candidate.url, label, text: contextText, matchedText: trimmed, ...wikiRevisionMeta(resolved.json) };
           urlContextNameEl.textContent = '🔗 ' + label;
         }
         if (!forcedCandidate) showWikiAlternatives(alternatives, trimmed, cmd);
         prefetchArticle(resolved.candidate.url);
+        if (mode !== 'compare') offerFullerEdition(myToken, trimmed, cmd, cLang, resolved.candidate.title);
       } catch (e) {
         if (myToken !== urlContextToken) return;
         pendingUrlContext = null;
@@ -2682,7 +2875,7 @@
           if (isShown()) chatNote.textContent = 'Generating…';
         }
         const content = [];
-        if (urlContext) content.push({ type: 'text', value: urlContextPreamble(urlContext) });
+        if (urlContext) content.push({ type: 'text', value: urlContextPreamble(urlContext, text) });
         if (text) content.push({ type: 'text', value: urlContext ? modelFacingText(text) : text });
         if (modelAttachment) content.push({ type: modelAttachment.type, value: modelAttachment.file });
         await streamReply(threadId, [{ role: 'user', content }], sessionTiming);
