@@ -1556,12 +1556,17 @@
     // literal command text is noise next to the article it produced.
     function urlContextPreamble(urlContext) {
       return 'The following was automatically fetched for you from ' + urlContext.label + ' and stays part of this conversation from here on -- you can refer back to it in later replies without it being repeated. '
-        + 'Base your answer on it; if it conflicts with what you remember, trust it, and if it doesn\'t cover the question, say so rather than guessing.\n\n'
+        + 'Base your answer on it; if it conflicts with what you remember, trust it, and if it doesn\'t cover the question, say so rather than guessing.'
+        // A French article with an English question: say explicitly which
+        // language to answer in, or a small model tends to drift into the
+        // source's language mid-reply.
+        + (urlContext.lang && urlContext.lang !== 'en' ? ' The source is from ' + languageName(urlContext.lang) + ' Wikipedia and written in ' + languageName(urlContext.lang) + '; reply in the language the user\'s message is written in, translating from the source as needed.' : '')
+        + '\n\n'
         + urlContext.text;
     }
     function modelFacingText(text) {
-      const m = /^\/wiki(?: (?:full|image))? (.+)$/is.exec(text || '');
-      return m ? m[1].trim() : text;
+      const cmd = parseWikiCommand(text);
+      return cmd ? cmd.query : text;
     }
     function buildInitialPrompts(msgs) {
       let startIdx = 0;
@@ -1730,7 +1735,7 @@
     // rendered cite carries the licence. Both come free in the REST
     // summary response already being fetched.
     function wikiRevisionMeta(json) {
-      return json && json.revision ? { revision: String(json.revision), timestamp: json.timestamp || null } : {};
+      return json && json.revision ? { revision: String(json.revision), timestamp: json.timestamp || null, lang: json.lang || null } : {};
     }
     function formatRevisionDate(ts) {
       const d = ts ? new Date(ts) : null;
@@ -1825,13 +1830,54 @@
     // only this one finds "Alexander Graham Bell" from that question) --
     // it's what Wikipedia's own search box actually falls back to once you
     // hit Enter/Search, not just the suggestion dropdown.
-    const WIKI_SLASH_PREFIX = '/wiki ';
+    //
     // /wiki full <topic> -- same resolution, but fetches the full plain-text
     // article (via the Action API's `extracts` prop) instead of the short
-    // REST summary, for when the summary genuinely isn't enough. Checked
-    // before the plain prefix below since "/wiki full x" also starts with
-    // "/wiki " -- the fuller prefix has to win the match.
-    const WIKI_FULL_SLASH_PREFIX = '/wiki full ';
+    // REST summary, for when the summary genuinely isn't enough.
+    //
+    // /wiki:fr <topic> (and /wiki:fr full, /wiki:fr image) -- the same
+    // pipeline against another language edition. Each edition is its own
+    // wiki at <lang>.wikipedia.org -- separately written articles, not
+    // translations, with its own search index -- but every API used here
+    // (search, pageprops, REST summary/media-list, extracts) has the same
+    // shape on all of them, so switching language is just switching host.
+    // The query has to be in that language: confirmed live that "who
+    // invented the telephone" on fr.wikipedia.org returns Nikola Tesla and
+    // "Routeur", while "qui a inventé le téléphone" finds "Invention du
+    // téléphone". What does NOT carry across is anything keyed on English
+    // words -- back-matter headings and question stopwords -- hence the
+    // per-language table below; a language only gets enabled once it has
+    // an entry. French is also one of the Prompt API's documented supported
+    // languages (en, ja, es, de, fr), so Gemini Nano reads it natively --
+    // no translation step in between.
+    const WIKI_LANGS = {
+      en: {
+        backMatter: ['See also', 'Notes', 'Notes and references', 'References', 'Citations', 'Sources', 'Bibliography', 'Further reading', 'External links', 'Footnotes'],
+        stopwords: 'the and for are was were who what when where which why how did does with from about that this its into than tell more much many have has had been will would could should there their them they his her him she you your our not any all some can',
+        stem: /(?:ing|ed|es|s)$/,
+      },
+      fr: {
+        // Confirmed live on "Édimbourg": its last two level-2 headings are
+        // "Notes et références" and "Voir aussi".
+        backMatter: ['Notes et références', 'Notes', 'Références', 'Voir aussi', 'Articles connexes', 'Liens externes', 'Bibliographie', 'Annexes', 'Sources'],
+        stopwords: 'les des une est qui que quoi quel quelle quels quelles quand comment pourquoi dans sur pour par avec son sa ses aux du de la le et ou été était sont ont plus moins cette ces qu où combien il elle ils elles nous vous leur leurs pas ne se sur entre depuis chez',
+        stem: /(?:s|x)$/,
+      },
+    };
+    const wikiHost = (lang) => 'https://' + lang + '.wikipedia.org';
+    const wikiArticleUrl = (lang, title) => wikiHost(lang) + '/wiki/' + encodeURIComponent(title.replace(/ /g, '_'));
+    function languageName(lang) {
+      try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(lang) || lang; } catch { return lang; }
+    }
+    // "/wiki x", "/wiki full x", "/wiki image x", "/wiki:fr x", "/wiki:fr full x" ...
+    // -> { lang, mode, query }, or null if it isn't a /wiki command at all.
+    // "/wiki fullerene" is a plain lookup of "fullerene": the mode word
+    // only counts when whitespace follows it.
+    function parseWikiCommand(text) {
+      const m = /^\/wiki(?::([a-z][a-z-]{1,11}))?(?:\s+(full|image)(?=\s))?\s+(\S[\s\S]*)$/i.exec((text || '').trim());
+      if (!m) return null;
+      return { lang: (m[1] || 'en').toLowerCase(), mode: m[2] ? m[2].toLowerCase() : 'summary', query: m[3].trim() };
+    }
     // A full article can run 40,000+ characters (confirmed: Eiffel Tower's
     // plain-text extract is ~45,000) -- nowhere close to fitting a small
     // on-device model's context window alongside actual conversation.
@@ -1852,24 +1898,24 @@
     // Edinburgh. Questions have no exact match and fall through to
     // full-text, with the runners-up offered in the chip (see
     // showWikiAlternatives) rather than silently trusted.
-    async function resolveWikiCandidates(query, limit) {
-      const [exact, fulltext] = await Promise.all([wikiSearch(query, 1, 'nearmatch'), wikiSearch(query, limit)]);
+    async function resolveWikiCandidates(lang, query, limit) {
+      const [exact, fulltext] = await Promise.all([wikiSearch(lang, query, 1, 'nearmatch'), wikiSearch(lang, query, limit)]);
       const seen = new Set();
       return [...exact, ...fulltext].filter((c) => !seen.has(c.title) && seen.add(c.title));
     }
-    async function wikiSearch(query, limit, what) {
-      const res = await fetch('https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent(query) + '&gsrlimit=' + limit + (what ? '&gsrwhat=' + what : '') + '&redirects=1&prop=pageprops&ppprop=disambiguation&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
+    async function wikiSearch(lang, query, limit, what) {
+      const res = await fetch(wikiHost(lang) + '/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent(query) + '&gsrlimit=' + limit + (what ? '&gsrwhat=' + what : '') + '&redirects=1&prop=pageprops&ppprop=disambiguation&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const pages = Object.values((data.query && data.query.pages) || {}).sort((a, b) => a.index - b.index);
       return pages.map((p) => ({
         title: p.title,
-        url: 'https://en.wikipedia.org/wiki/' + encodeURIComponent(p.title.replace(/ /g, '_')),
+        url: wikiArticleUrl(lang, p.title),
         disambiguation: !!(p.pageprops && 'disambiguation' in p.pageprops),
       }));
     }
-    async function fetchFullArticleText(title) {
-      const res = await fetch('https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&titles=' + encodeURIComponent(title) + '&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
+    async function fetchFullArticleText(lang, title) {
+      const res = await fetch(wikiHost(lang) + '/w/api.php?action=query&prop=extracts&explaintext=1&titles=' + encodeURIComponent(title) + '&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const pages = (data.query && data.query.pages) || {};
@@ -1880,7 +1926,7 @@
     // and link farms -- no use to the model, and on a short article it was
     // eating a real share of the character budget. Level-2 headings only
     // ("== See also ==", not a "=== Notes ===" subsection mid-article).
-    const WIKI_BACK_MATTER = /\n==[ ]*(?:See also|Notes|Notes and references|References|Citations|Sources|Bibliography|Further reading|External links|Footnotes)[ ]*==[ ]*\n[\s\S]*$/i;
+    const wikiBackMatter = (lang) => new RegExp('\\n==[ ]*(?:' + WIKI_LANGS[lang].backMatter.join('|') + ')[ ]*==[ ]*\\n[\\s\\S]*$', 'i');
     // Cut on a paragraph break (or failing that, a sentence end) rather than
     // mid-word -- a half-sentence at the end reads to a small model as
     // something to complete, not as a cut.
@@ -1908,18 +1954,18 @@
       }
       return sections.filter((sct) => sct.heading === null || sct.body);
     }
-    const QUERY_STOPWORDS = new Set('the and for are was were who what when where which why how did does with from about that this its into than tell more much many have has had been will would could should there their them they his her him she you your our not any all some can'.split(' '));
     // Words in the question that could point at a section -- minus
     // stopwords and minus the article title's own words (every section of
     // "Edinburgh" mentions Edinburgh, so it can't discriminate).
-    function queryTerms(query, title) {
+    function queryTerms(lang, query, title) {
+      const stopwords = new Set(WIKI_LANGS[lang].stopwords.split(' '));
       const titleWords = new Set(title.toLowerCase().split(/[^\p{L}\p{N}]+/u));
       const words = query.toLowerCase().split(/[^\p{L}\p{N}]+/u);
       // Crude suffix stripping so "besieged" also hits "besieging" -- a
       // substring match on the stem does the rest. (It won't bridge
       // "besieged" to "siege"; real stemming is out of scope here.)
-      return [...new Set(words)].filter((w) => w.length > 2 && !QUERY_STOPWORDS.has(w) && !titleWords.has(w))
-        .map((w) => w.length > 5 ? w.replace(/(?:ing|ed|es|s)$/, '') : w);
+      return [...new Set(words)].filter((w) => w.length > 2 && !stopwords.has(w) && !titleWords.has(w))
+        .map((w) => w.length > 5 ? w.replace(WIKI_LANGS[lang].stem, '') : w);
     }
     // When a full article won't fit, the first N characters is the wrong
     // N characters for most questions -- "/wiki full when was edinburgh
@@ -1930,11 +1976,11 @@
     // own order. No model call -- deterministic and instant. A bare topic
     // ("/wiki full edinburgh") has no discriminating terms and keeps the
     // simple first-N-characters behaviour.
-    function formatFullArticle(title, extract, query) {
-      const text = extract.replace(WIKI_BACK_MATTER, '').trim();
-      const header = 'Wikipedia (full article): ' + title + '\n';
+    function formatFullArticle(lang, title, extract, query) {
+      const text = extract.replace(wikiBackMatter(lang), '').trim();
+      const header = 'Wikipedia' + (lang !== 'en' ? ' (' + languageName(lang) + ')' : '') + ' (full article): ' + title + '\n';
       if (text.length <= MAX_FULL_ARTICLE_CHARS) return header + text;
-      const terms = query ? queryTerms(query, title) : [];
+      const terms = query ? queryTerms(lang, query, title) : [];
       const sections = splitWikiSections(text);
       const scored = sections.slice(1).map((sct, i) => {
         const body = sct.body.toLowerCase();
@@ -1964,7 +2010,6 @@
     // lead photo (via the REST media-list endpoint) and attaches it exactly
     // like a manually-picked file would, so it's both visible in the chat
     // and handed to the model as real multimodal input, not just described.
-    const WIKI_IMAGE_SLASH_PREFIX = '/wiki image ';
     // Only ever auto-attach images actually hosted on Wikimedia Commons --
     // Commons' own policy explicitly forbids hosting fair-use-only media,
     // so a Commons URL is a real, checkable guarantee of a freely-licensed
@@ -1980,8 +2025,8 @@
       const src = item.srcset && item.srcset[0] && item.srcset[0].src;
       return !!src && src.includes('/wikipedia/commons/');
     }
-    async function fetchWikiLeadImage(title) {
-      const res = await fetch('https://en.wikipedia.org/api/rest_v1/page/media-list/' + encodeURIComponent(title.replace(/ /g, '_')), { headers: WIKIMEDIA_HEADERS });
+    async function fetchWikiLeadImage(lang, title) {
+      const res = await fetch(wikiHost(lang) + '/api/rest_v1/page/media-list/' + encodeURIComponent(title.replace(/ /g, '_')), { headers: WIKIMEDIA_HEADERS });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const items = data.items || [];
@@ -1997,7 +2042,7 @@
       const imgRes = await fetch(imgUrl);
       if (!imgRes.ok) throw new Error('HTTP ' + imgRes.status + ' fetching the image itself');
       const blob = await imgRes.blob();
-      return { blob, title: chosen.title.replace(/^File:/, '') };
+      return { blob, title: chosen.title.replace(/^[^:]+:/, '') /* File:, Fichier:, ... -- the namespace is localised */ };
     }
 
     // pendingUrlContext holds the fetched, ready-to-send context; the token
@@ -2033,15 +2078,11 @@
     async function maybeFetchUrlContext() {
       const text = chatInput.value;
       const trimmed = text.trim();
-      const lower = trimmed.toLowerCase();
-      if (lower.startsWith(WIKI_IMAGE_SLASH_PREFIX) || lower.startsWith(WIKI_FULL_SLASH_PREFIX) || lower.startsWith(WIKI_SLASH_PREFIX)) {
+      const cmd = parseWikiCommand(trimmed);
+      if (cmd) {
         if (pendingUrlContext && pendingUrlContext.matchedText === trimmed) return;
         if (trimmed === urlContextInFlightKey) { await urlContextInFlightPromise; return; }
-        const mode = lower.startsWith(WIKI_IMAGE_SLASH_PREFIX) ? 'image' : lower.startsWith(WIKI_FULL_SLASH_PREFIX) ? 'full' : 'summary';
-        const prefixLen = mode === 'image' ? WIKI_IMAGE_SLASH_PREFIX.length : mode === 'full' ? WIKI_FULL_SLASH_PREFIX.length : WIKI_SLASH_PREFIX.length;
-        const query = trimmed.slice(prefixLen).trim();
-        if (!query) { urlContextInFlightKey = null; urlContextInFlightPromise = null; clearUrlContext(); return; }
-        const p = resolveWikiSlashCommand(trimmed, query, mode);
+        const p = resolveWikiSlashCommand(trimmed, cmd);
         urlContextInFlightKey = trimmed;
         urlContextInFlightPromise = p;
         await p;
@@ -2094,7 +2135,7 @@
     // as one-click swaps in the chip. Picking one re-runs the same command
     // pinned to that title; the matchedText guard then keeps the debounce
     // and the send path from re-resolving it back to the default pick.
-    function showWikiAlternatives(alts, trimmed, query, mode) {
+    function showWikiAlternatives(alts, trimmed, cmd) {
       urlContextAltsEl.innerHTML = '';
       if (!alts.length) return;
       urlContextAltsEl.append('Not it?');
@@ -2104,34 +2145,37 @@
         btn.textContent = alt.title;
         btn.title = 'Use "' + alt.title + '" instead';
         btn.addEventListener('click', () => {
-          const p = resolveWikiSlashCommand(trimmed, query, mode, alt);
+          const p = resolveWikiSlashCommand(trimmed, cmd, alt);
           urlContextInFlightKey = trimmed;
           urlContextInFlightPromise = p;
         });
         urlContextAltsEl.append(btn);
       }
     }
-    async function resolveWikiSlashCommand(trimmed, query, mode, forcedCandidate) {
+    async function resolveWikiSlashCommand(trimmed, cmd, forcedCandidate) {
+      const { lang, mode, query } = cmd;
       const myToken = ++urlContextToken;
       urlContextAltsEl.innerHTML = '';
       urlContextChip.style.display = 'flex';
-      urlContextNameEl.textContent = 'Searching Wikipedia for "' + query + '"…';
+      urlContextNameEl.textContent = 'Searching ' + (lang !== 'en' ? languageName(lang) + ' ' : '') + 'Wikipedia for "' + query + '"…';
       try {
+        if (!WIKI_LANGS[lang]) throw new Error('/wiki:' + lang + " isn't supported yet -- " + Object.keys(WIKI_LANGS).map((l) => '/wiki:' + l).join(', ') + ' so far');
         // A few candidates, not just the top one -- the top full-text match
         // is sometimes a disambiguation page (e.g. "noting" -> "Note", a
         // bare list of unrelated things the word could mean) while a
         // perfectly good real article sits right below it. Walk through in
         // order and use the first one that isn't a disambiguation page,
         // rather than either guessing blindly or failing on a fixable case.
-        const candidates = forcedCandidate ? [forcedCandidate] : await resolveWikiCandidates(query, 4);
+        const candidates = forcedCandidate ? [forcedCandidate] : await resolveWikiCandidates(lang, query, 4);
         if (myToken !== urlContextToken) return; // stale -- command changed while this was in flight
         if (!candidates.length) throw new Error('no matching article found');
         const wikiSrc = URL_SOURCES.find((s) => s.id === 'wikipedia');
         const candidate = candidates.find((c) => !c.disambiguation);
         if (!candidate) throw new Error('only found a disambiguation page ("' + candidates[0].title + '") -- try being more specific');
+        const langTag = lang !== 'en' ? ' (' + lang + ')' : '';
         const alternatives = candidates.filter((c) => !c.disambiguation && c !== candidate).slice(0, 2);
         urlContextNameEl.textContent = 'Fetching ' + candidate.title + '…';
-        const res = await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(candidate.title.replace(/ /g, '_')), { headers: WIKIMEDIA_HEADERS });
+        const res = await fetch(wikiHost(lang) + '/api/rest_v1/page/summary/' + encodeURIComponent(candidate.title.replace(/ /g, '_')), { headers: WIKIMEDIA_HEADERS });
         if (myToken !== urlContextToken) return;
         if (!res.ok) {
           const reason = res.status === 403 || res.status === 429 ? 'rate limited, try again in a bit' : 'HTTP ' + res.status;
@@ -2141,30 +2185,30 @@
 
         if (mode === 'image') {
           urlContextNameEl.textContent = 'Fetching image: ' + resolved.candidate.title + '…';
-          const { blob, title: imageTitle } = await fetchWikiLeadImage(resolved.candidate.title);
+          const { blob, title: imageTitle } = await fetchWikiLeadImage(lang, resolved.candidate.title);
           if (myToken !== urlContextToken) return;
           pendingAttachment = { file: blob, type: 'image' };
           wikiImageOwnsAttachment = true;
           attachmentNameEl.textContent = imageTitle;
           attachmentChip.style.display = 'flex';
-          const label = resolved.candidate.title + ' (image)';
+          const label = resolved.candidate.title + langTag + ' (image)';
           pendingUrlContext = { url: resolved.candidate.url, label, text: 'Wikipedia image from "' + resolved.candidate.title + '": ' + imageTitle, matchedText: trimmed };
           urlContextNameEl.textContent = '🔗 ' + label;
         } else {
           let contextText;
           if (mode === 'full') {
             urlContextNameEl.textContent = 'Fetching full article: ' + resolved.candidate.title + '…';
-            const extract = await fetchFullArticleText(resolved.candidate.title);
+            const extract = await fetchFullArticleText(lang, resolved.candidate.title);
             if (myToken !== urlContextToken) return;
-            contextText = formatFullArticle(resolved.candidate.title, extract, query);
+            contextText = formatFullArticle(lang, resolved.candidate.title, extract, query);
           } else {
             contextText = wikiSrc.format(resolved.json);
           }
-          const label = resolved.candidate.title + (mode === 'full' ? ' (full article)' : '');
+          const label = resolved.candidate.title + langTag + (mode === 'full' ? ' (full article)' : '');
           pendingUrlContext = { url: resolved.candidate.url, label, text: contextText, matchedText: trimmed, ...wikiRevisionMeta(resolved.json) };
           urlContextNameEl.textContent = '🔗 ' + label;
         }
-        if (!forcedCandidate) showWikiAlternatives(alternatives, trimmed, query, mode);
+        if (!forcedCandidate) showWikiAlternatives(alternatives, trimmed, cmd);
       } catch (e) {
         if (myToken !== urlContextToken) return;
         pendingUrlContext = null;
@@ -2310,7 +2354,7 @@
       const isShown = () => activeThreadId === threadId;
       if (isShown()) chatSendBtn.disabled = true;
       const userMsg = { role: 'user', content: text };
-      if (urlContext) userMsg.urlContext = { url: urlContext.url, label: urlContext.label, text: urlContext.text, revision: urlContext.revision, timestamp: urlContext.timestamp };
+      if (urlContext) userMsg.urlContext = { url: urlContext.url, label: urlContext.label, text: urlContext.text, revision: urlContext.revision, timestamp: urlContext.timestamp, lang: urlContext.lang };
       let modelAttachment = null; // { type, file } actually sent to the model this turn
       if (attachment) {
         userMsg.attachmentType = attachment.type;
@@ -2394,7 +2438,7 @@
       // message the instant Enter was pressed, with the model then honestly
       // saying it had no Wikipedia access -- because it genuinely hadn't
       // been given anything.
-      const hadRecognizedSource = text.toLowerCase().startsWith(WIKI_SLASH_PREFIX) || !!detectUrlSource(chatInput.value);
+      const hadRecognizedSource = !!parseWikiCommand(text) || !!detectUrlSource(chatInput.value);
       sendChatGuardActive = true;
       try {
         clearTimeout(urlContextDebounceTimer);
