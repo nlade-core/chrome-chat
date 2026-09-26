@@ -264,7 +264,14 @@
   .msg-attachment-img { max-width: 100%; max-height: 220px; border-radius: 0.75rem; margin-bottom: 0.5rem; }
   .msg-attachment-audio { width: 100%; margin-bottom: 0.5rem; }
   .msg-attachment-missing { color: var(--muted); font-size: 0.8rem; font-style: italic; margin-bottom: 0.4rem; }
+  .url-context-alts { display: flex; align-items: center; gap: 0.35rem; flex: none; max-width: 55%; color: var(--muted); }
+  .url-context-alts:empty { display: none; }
+  .attachment-chip .url-context-alts button {
+    color: var(--accent); font-size: 0.78rem; padding: 0; text-decoration: underline; cursor: pointer;
+    max-width: 9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .msg-url-context { font-size: 0.78rem; margin-top: 0.35rem; opacity: 0.85; }
+  .msg-url-context .cite-meta { color: var(--muted); }
   .msg-url-context a { color: inherit; }
   .msg-url-context summary { cursor: pointer; color: var(--muted); margin-top: 0.3rem; }
   .msg-url-context pre {
@@ -371,6 +378,7 @@
             </div>
             <div class="attachment-chip" id="url-context-chip" style="display:none;">
               <span id="url-context-name"></span>
+              <div class="url-context-alts" id="url-context-alts"></div>
               <button id="remove-url-context-btn" aria-label="Remove linked context">×</button>
             </div>
             <div class="composer-box">
@@ -414,6 +422,7 @@
     const urlContextChip = document.getElementById('url-context-chip');
     const urlContextNameEl = document.getElementById('url-context-name');
     const removeUrlContextBtn = document.getElementById('remove-url-context-btn');
+    const urlContextAltsEl = document.getElementById('url-context-alts');
     const chatNote = document.getElementById('chat-note');
     const hamburgerBtn = document.getElementById('hamburger-btn');
     const summarizeBtn = document.getElementById('summarize-btn');
@@ -857,7 +866,8 @@
             const editBtn = (!isStreaming && editingIndex === null)
               ? '<div class="msg-actions"><button class="icon-btn edit-btn" data-i="' + i + '">Edit</button></div>' : '';
             const urlCite = m.urlContext
-              ? '<div class="msg-url-context">🔗 <a href="' + escapeHtml(m.urlContext.url) + '" target="_blank" rel="noopener">' + escapeHtml(m.urlContext.label) + '</a>'
+              ? '<div class="msg-url-context">🔗 <a href="' + escapeHtml(m.urlContext.revision ? m.urlContext.url + '?oldid=' + m.urlContext.revision : m.urlContext.url) + '" target="_blank" rel="noopener">' + escapeHtml(m.urlContext.label) + '</a>'
+                + (m.urlContext.revision ? ' <span class="cite-meta">· revision of ' + escapeHtml(formatRevisionDate(m.urlContext.timestamp)) + ' · text <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a></span>' : '')
                 + (m.urlContext.text ? '<details><summary>Show what was fetched</summary><pre>' + escapeHtml(m.urlContext.text) + '</pre></details>' : '')
                 + '</div>'
               : '';
@@ -1714,6 +1724,18 @@
     // preflight). Only sent to *.wikipedia.org -- upload.wikimedia.org image
     // fetches stay header-free so they don't trigger a preflight.
     const WIKIMEDIA_HEADERS = { 'Api-User-Agent': 'chrome-chat (https://github.com/nlade-core/chrome-chat)' };
+    // Wikipedia text is CC BY-SA and changes under you -- the citation pins
+    // the exact revision the model was actually given (a permalink via
+    // ?oldid=, which works on any language wiki's /wiki/ path), and the
+    // rendered cite carries the licence. Both come free in the REST
+    // summary response already being fetched.
+    function wikiRevisionMeta(json) {
+      return json && json.revision ? { revision: String(json.revision), timestamp: json.timestamp || null } : {};
+    }
+    function formatRevisionDate(ts) {
+      const d = ts ? new Date(ts) : null;
+      return d && !isNaN(d) ? d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : 'unknown date';
+    }
     const URL_SOURCES = [
       {
         id: 'github',
@@ -1738,6 +1760,7 @@
         label: (m) => decodeURIComponent(m[2]).replace(/_/g, ' '),
         apiUrl: (m) => 'https://' + m[1] + '.wikipedia.org/api/rest_v1/page/summary/' + m[2],
         headers: WIKIMEDIA_HEADERS,
+        meta: (json) => wikiRevisionMeta(json),
         format: (json) => [
           'Wikipedia: ' + json.title,
           json.description ? '(' + json.description + ')' : null,
@@ -1778,7 +1801,7 @@
         const raw = src.regex.exec(text);
         if (!raw) continue;
         const m = src.regex.exec(trimTrailingPunct(raw[0])) || raw;
-        return { src, url: m[0], label: src.label(m), apiUrl: src.apiUrl(m), headers: src.headers };
+        return { src, url: m[0].replace('.m.wikipedia.org', '.wikipedia.org'), label: src.label(m), apiUrl: src.apiUrl(m), headers: src.headers };
       }
       return null;
     }
@@ -1820,8 +1843,22 @@
     // candidate's summary in turn just to find out (up to 3 extra round
     // trips on an unlucky query like "noting"). Generator results come back
     // keyed by page id, unordered; `index` is the search rank.
+    //
+    // Full-text ranking also isn't stable -- the same "who invented the
+    // telephone" query put "Telephone" first on one call and "The Telephone
+    // Cases" first on another (different search backends). So an exact
+    // title/redirect match (`gsrwhat=nearmatch`) is looked up in parallel
+    // and, when there is one, wins outright: "/wiki edinburgh" always means
+    // Edinburgh. Questions have no exact match and fall through to
+    // full-text, with the runners-up offered in the chip (see
+    // showWikiAlternatives) rather than silently trusted.
     async function resolveWikiCandidates(query, limit) {
-      const res = await fetch('https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent(query) + '&gsrlimit=' + limit + '&prop=pageprops&ppprop=disambiguation&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
+      const [exact, fulltext] = await Promise.all([wikiSearch(query, 1, 'nearmatch'), wikiSearch(query, limit)]);
+      const seen = new Set();
+      return [...exact, ...fulltext].filter((c) => !seen.has(c.title) && seen.add(c.title));
+    }
+    async function wikiSearch(query, limit, what) {
+      const res = await fetch('https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent(query) + '&gsrlimit=' + limit + (what ? '&gsrwhat=' + what : '') + '&redirects=1&prop=pageprops&ppprop=disambiguation&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const pages = Object.values((data.query && data.query.pages) || {}).sort((a, b) => a.index - b.index);
@@ -1844,22 +1881,84 @@
     // eating a real share of the character budget. Level-2 headings only
     // ("== See also ==", not a "=== Notes ===" subsection mid-article).
     const WIKI_BACK_MATTER = /\n==[ ]*(?:See also|Notes|Notes and references|References|Citations|Sources|Bibliography|Further reading|External links|Footnotes)[ ]*==[ ]*\n[\s\S]*$/i;
-    function formatFullArticle(title, extract) {
-      const text = extract.replace(WIKI_BACK_MATTER, '').trim();
-      const truncated = text.length > MAX_FULL_ARTICLE_CHARS;
-      let body = text;
-      if (truncated) {
-        // Cut on a paragraph break (or failing that, a sentence end) rather
-        // than mid-word -- a half-sentence at the end reads to a small model
-        // as something to complete, not as a cut.
-        body = text.slice(0, MAX_FULL_ARTICLE_CHARS);
-        const para = body.lastIndexOf('\n');
-        const sentence = body.lastIndexOf('. ');
-        const cut = para > MAX_FULL_ARTICLE_CHARS * 0.7 ? para : sentence > MAX_FULL_ARTICLE_CHARS * 0.7 ? sentence + 1 : body.length;
-        body = body.slice(0, cut).trim();
+    // Cut on a paragraph break (or failing that, a sentence end) rather than
+    // mid-word -- a half-sentence at the end reads to a small model as
+    // something to complete, not as a cut.
+    function cutAtBoundary(text, max) {
+      if (text.length <= max) return text;
+      const head = text.slice(0, max);
+      const para = head.lastIndexOf('\n');
+      const sentence = head.lastIndexOf('. ');
+      const cut = para > max * 0.7 ? para : sentence > max * 0.7 ? sentence + 1 : max;
+      return head.slice(0, cut).trim();
+    }
+    // Splits a plain-text extract on its "== Heading ==" lines. Subsections
+    // carry their parent's heading ("History › Old Town") so a chunk pulled
+    // out of order still says where it came from.
+    function splitWikiSections(text) {
+      const chunks = text.split(/\n(?==+[^=\n]+=+[ ]*\n)/);
+      const sections = [{ heading: null, body: chunks[0].trim() }];
+      let parent = null;
+      for (const chunk of chunks.slice(1)) {
+        const m = /^(=+)\s*(.*?)\s*=+[ ]*\n/.exec(chunk);
+        if (!m) { sections[sections.length - 1].body += '\n' + chunk; continue; }
+        if (m[1].length <= 2) parent = m[2];
+        const heading = m[1].length > 2 && parent ? parent + ' › ' + m[2] : m[2];
+        sections.push({ heading, body: chunk.slice(m[0].length).trim() });
       }
-      return 'Wikipedia (full article): ' + title + '\n' + body
-        + (truncated ? '\n\n[...truncated -- showing the first ' + body.length + ' of ' + text.length + ' characters, references excluded]' : '');
+      return sections.filter((sct) => sct.heading === null || sct.body);
+    }
+    const QUERY_STOPWORDS = new Set('the and for are was were who what when where which why how did does with from about that this its into than tell more much many have has had been will would could should there their them they his her him she you your our not any all some can'.split(' '));
+    // Words in the question that could point at a section -- minus
+    // stopwords and minus the article title's own words (every section of
+    // "Edinburgh" mentions Edinburgh, so it can't discriminate).
+    function queryTerms(query, title) {
+      const titleWords = new Set(title.toLowerCase().split(/[^\p{L}\p{N}]+/u));
+      const words = query.toLowerCase().split(/[^\p{L}\p{N}]+/u);
+      // Crude suffix stripping so "besieged" also hits "besieging" -- a
+      // substring match on the stem does the rest. (It won't bridge
+      // "besieged" to "siege"; real stemming is out of scope here.)
+      return [...new Set(words)].filter((w) => w.length > 2 && !QUERY_STOPWORDS.has(w) && !titleWords.has(w))
+        .map((w) => w.length > 5 ? w.replace(/(?:ing|ed|es|s)$/, '') : w);
+    }
+    // When a full article won't fit, the first N characters is the wrong
+    // N characters for most questions -- "/wiki full when was edinburgh
+    // castle besieged" wants the History sections, not the lead plus
+    // Etymology. So: always the lead, then sections ranked by plain term
+    // overlap with the question (heading hits weighted up, per-term counts
+    // capped so one repeated word can't dominate), emitted in the article's
+    // own order. No model call -- deterministic and instant. A bare topic
+    // ("/wiki full edinburgh") has no discriminating terms and keeps the
+    // simple first-N-characters behaviour.
+    function formatFullArticle(title, extract, query) {
+      const text = extract.replace(WIKI_BACK_MATTER, '').trim();
+      const header = 'Wikipedia (full article): ' + title + '\n';
+      if (text.length <= MAX_FULL_ARTICLE_CHARS) return header + text;
+      const terms = query ? queryTerms(query, title) : [];
+      const sections = splitWikiSections(text);
+      const scored = sections.slice(1).map((sct, i) => {
+        const body = sct.body.toLowerCase();
+        const heading = sct.heading.toLowerCase();
+        let score = 0;
+        for (const t of terms) score += Math.min(5, body.split(t).length - 1) + (heading.includes(t) ? 5 : 0);
+        return { ...sct, i: i + 1, score };
+      }).filter((sct) => sct.score > 0).sort((a, b) => b.score - a.score);
+      if (!scored.length) {
+        const body = cutAtBoundary(text, MAX_FULL_ARTICLE_CHARS);
+        return header + body + '\n\n[...truncated -- showing the first ' + body.length + ' of ' + text.length + ' characters, references excluded]';
+      }
+      const lead = cutAtBoundary(sections[0].body, Math.round(MAX_FULL_ARTICLE_CHARS * 0.35));
+      let budget = MAX_FULL_ARTICLE_CHARS - lead.length;
+      const picked = [];
+      for (const sct of scored) {
+        if (budget < 400) break;
+        const body = cutAtBoundary(sct.body, budget - sct.heading.length - 10);
+        picked.push({ ...sct, body });
+        budget -= body.length + sct.heading.length + 10;
+      }
+      picked.sort((a, b) => a.i - b.i);
+      const out = lead + picked.map((sct) => '\n\n== ' + sct.heading + ' ==\n' + sct.body).join('');
+      return header + out + '\n\n[...article too long to include whole -- showing the lead plus the sections most relevant to "' + query + '": ' + picked.map((sct) => sct.heading).join('; ') + ' (' + out.length + ' of ' + text.length + ' characters, references excluded)]';
     }
     // /wiki image <topic> -- same resolution again, but pulls the article's
     // lead photo (via the REST media-list endpoint) and attaches it exactly
@@ -1918,6 +2017,7 @@
     function clearUrlContext() {
       pendingUrlContext = null;
       urlContextChip.style.display = 'none';
+      urlContextAltsEl.innerHTML = '';
       if (wikiImageOwnsAttachment) {
         pendingAttachment = null;
         wikiImageOwnsAttachment = false;
@@ -1961,6 +2061,7 @@
     async function fetchUrlContext(found) {
       const myToken = ++urlContextToken;
       urlContextChip.style.display = 'flex';
+      urlContextAltsEl.innerHTML = '';
       urlContextNameEl.textContent = 'Fetching ' + found.label + '…';
       try {
         const res = await fetch(found.apiUrl, found.headers ? { headers: found.headers } : undefined);
@@ -1973,7 +2074,7 @@
         }
         const json = await res.json();
         const contextText = found.src.format(json);
-        pendingUrlContext = { url: found.url, label: found.label, text: contextText };
+        pendingUrlContext = { url: found.url, label: found.label, text: contextText, ...(found.src.meta ? found.src.meta(json) : {}) };
         urlContextNameEl.textContent = '🔗 ' + found.label;
       } catch (e) {
         if (myToken !== urlContextToken) return;
@@ -1989,8 +2090,30 @@
         if (urlContextInFlightKey === found.url) { urlContextInFlightKey = null; urlContextInFlightPromise = null; }
       }
     }
-    async function resolveWikiSlashCommand(trimmed, query, mode) {
+    // "Not it?" -- the other real (non-disambiguation) candidates, offered
+    // as one-click swaps in the chip. Picking one re-runs the same command
+    // pinned to that title; the matchedText guard then keeps the debounce
+    // and the send path from re-resolving it back to the default pick.
+    function showWikiAlternatives(alts, trimmed, query, mode) {
+      urlContextAltsEl.innerHTML = '';
+      if (!alts.length) return;
+      urlContextAltsEl.append('Not it?');
+      for (const alt of alts) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = alt.title;
+        btn.title = 'Use "' + alt.title + '" instead';
+        btn.addEventListener('click', () => {
+          const p = resolveWikiSlashCommand(trimmed, query, mode, alt);
+          urlContextInFlightKey = trimmed;
+          urlContextInFlightPromise = p;
+        });
+        urlContextAltsEl.append(btn);
+      }
+    }
+    async function resolveWikiSlashCommand(trimmed, query, mode, forcedCandidate) {
       const myToken = ++urlContextToken;
+      urlContextAltsEl.innerHTML = '';
       urlContextChip.style.display = 'flex';
       urlContextNameEl.textContent = 'Searching Wikipedia for "' + query + '"…';
       try {
@@ -2000,12 +2123,13 @@
         // perfectly good real article sits right below it. Walk through in
         // order and use the first one that isn't a disambiguation page,
         // rather than either guessing blindly or failing on a fixable case.
-        const candidates = await resolveWikiCandidates(query, 3);
+        const candidates = forcedCandidate ? [forcedCandidate] : await resolveWikiCandidates(query, 4);
         if (myToken !== urlContextToken) return; // stale -- command changed while this was in flight
         if (!candidates.length) throw new Error('no matching article found');
         const wikiSrc = URL_SOURCES.find((s) => s.id === 'wikipedia');
         const candidate = candidates.find((c) => !c.disambiguation);
         if (!candidate) throw new Error('only found a disambiguation page ("' + candidates[0].title + '") -- try being more specific');
+        const alternatives = candidates.filter((c) => !c.disambiguation && c !== candidate).slice(0, 2);
         urlContextNameEl.textContent = 'Fetching ' + candidate.title + '…';
         const res = await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(candidate.title.replace(/ /g, '_')), { headers: WIKIMEDIA_HEADERS });
         if (myToken !== urlContextToken) return;
@@ -2032,14 +2156,15 @@
             urlContextNameEl.textContent = 'Fetching full article: ' + resolved.candidate.title + '…';
             const extract = await fetchFullArticleText(resolved.candidate.title);
             if (myToken !== urlContextToken) return;
-            contextText = formatFullArticle(resolved.candidate.title, extract);
+            contextText = formatFullArticle(resolved.candidate.title, extract, query);
           } else {
             contextText = wikiSrc.format(resolved.json);
           }
           const label = resolved.candidate.title + (mode === 'full' ? ' (full article)' : '');
-          pendingUrlContext = { url: resolved.candidate.url, label, text: contextText, matchedText: trimmed };
+          pendingUrlContext = { url: resolved.candidate.url, label, text: contextText, matchedText: trimmed, ...wikiRevisionMeta(resolved.json) };
           urlContextNameEl.textContent = '🔗 ' + label;
         }
+        if (!forcedCandidate) showWikiAlternatives(alternatives, trimmed, query, mode);
       } catch (e) {
         if (myToken !== urlContextToken) return;
         pendingUrlContext = null;
@@ -2185,7 +2310,7 @@
       const isShown = () => activeThreadId === threadId;
       if (isShown()) chatSendBtn.disabled = true;
       const userMsg = { role: 'user', content: text };
-      if (urlContext) userMsg.urlContext = { url: urlContext.url, label: urlContext.label, text: urlContext.text };
+      if (urlContext) userMsg.urlContext = { url: urlContext.url, label: urlContext.label, text: urlContext.text, revision: urlContext.revision, timestamp: urlContext.timestamp };
       let modelAttachment = null; // { type, file } actually sent to the model this turn
       if (attachment) {
         userMsg.attachmentType = attachment.type;
