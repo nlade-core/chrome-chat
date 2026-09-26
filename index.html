@@ -1898,21 +1898,51 @@
     // Edinburgh. Questions have no exact match and fall through to
     // full-text, with the runners-up offered in the chip (see
     // showWikiAlternatives) rather than silently trusted.
+    //
+    // /wiki:fr with an English query ("/wiki:fr who invented the telephone")
+    // would search French Wikipedia with English words and get junk. So an
+    // English-looking query is searched on English Wikipedia instead, and
+    // each hit is hopped to its French counterpart via the article's own
+    // interlanguage link (`prop=langlinks&lllang=fr`) -- in the SAME search
+    // request, no extra round trip. Confirmed live: Telephone -> Téléphone,
+    // Edinburgh Castle -> Château d'Édimbourg. Hits with no French article
+    // are dropped. An exact French title still wins first either way.
     async function resolveWikiCandidates(lang, query, limit) {
-      const [exact, fulltext] = await Promise.all([wikiSearch(lang, query, 1, 'nearmatch'), wikiSearch(lang, query, limit)]);
+      const hop = lang !== 'en' && looksEnglish(query, lang);
+      const [exact, fulltext, hopExact, hopFull] = await Promise.all([
+        wikiSearch(lang, query, 1, 'nearmatch'),
+        hop ? [] : wikiSearch(lang, query, limit),
+        hop ? wikiSearch('en', query, 1, 'nearmatch', lang) : [],
+        hop ? wikiSearch('en', query, limit, null, lang) : [],
+      ]);
       const seen = new Set();
-      return [...exact, ...fulltext].filter((c) => !seen.has(c.title) && seen.add(c.title));
+      return [...exact, ...hopExact, ...hopFull, ...fulltext].filter((c) => !seen.has(c.title) && seen.add(c.title));
     }
-    async function wikiSearch(lang, query, limit, what) {
-      const res = await fetch(wikiHost(lang) + '/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent(query) + '&gsrlimit=' + limit + (what ? '&gsrwhat=' + what : '') + '&redirects=1&prop=pageprops&ppprop=disambiguation&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
+    // Cheap language guess from function words alone -- no model, no
+    // download. Only has to answer "is this English rather than <lang>?"
+    // for the hop above; a bare proper noun ("edinburgh") scores 0-0 and
+    // stays a native search, where an exact-title/redirect match usually
+    // catches it anyway.
+    const FUNCTION_WORDS = {
+      en: 'the of and is are was were who what when where why how does did in on to a an it its with about',
+      fr: 'le la les des du de un une est sont qui que quoi quand comment pourquoi où et au aux dans sur avec quel quelle',
+    };
+    function looksEnglish(query, lang) {
+      const words = query.toLowerCase().split(/[^\p{L}\p{N}]+/u);
+      const count = (l) => { const set = new Set((FUNCTION_WORDS[l] || '').split(' ')); return words.filter((w) => set.has(w)).length; };
+      return count('en') > count(lang);
+    }
+    async function wikiSearch(lang, query, limit, what, linkTo) {
+      const res = await fetch(wikiHost(lang) + '/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent(query) + '&gsrlimit=' + limit + (what ? '&gsrwhat=' + what : '') + '&redirects=1&prop=pageprops' + (linkTo ? '|langlinks&lllang=' + linkTo + '&lllimit=max' : '') + '&ppprop=disambiguation&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const pages = Object.values((data.query && data.query.pages) || {}).sort((a, b) => a.index - b.index);
-      return pages.map((p) => ({
-        title: p.title,
-        url: wikiArticleUrl(lang, p.title),
-        disambiguation: !!(p.pageprops && 'disambiguation' in p.pageprops),
-      }));
+      return pages.map((p) => {
+        const disambiguation = !!(p.pageprops && 'disambiguation' in p.pageprops);
+        if (!linkTo) return { title: p.title, url: wikiArticleUrl(lang, p.title), disambiguation };
+        const link = p.langlinks && p.langlinks[0];
+        return link ? { title: link['*'], url: wikiArticleUrl(linkTo, link['*']), disambiguation, via: p.title } : null;
+      }).filter(Boolean);
     }
     async function fetchFullArticleText(lang, title) {
       const res = await fetch(wikiHost(lang) + '/w/api.php?action=query&prop=extracts&explaintext=1&titles=' + encodeURIComponent(title) + '&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
@@ -1976,19 +2006,24 @@
     // own order. No model call -- deterministic and instant. A bare topic
     // ("/wiki full edinburgh") has no discriminating terms and keeps the
     // simple first-N-characters behaviour.
+    // Non-lead sections with score >= minScore, best first, each keeping its
+    // article position `i`. Shared by /wiki full and follow-up reading.
+    function scoreSections(sections, terms, minScore) {
+      return sections.map((sct, i) => ({ ...sct, i })).slice(1).map((sct) => {
+        const body = sct.body.toLowerCase();
+        const heading = sct.heading.toLowerCase();
+        let score = 0;
+        for (const t of terms) score += Math.min(5, body.split(t).length - 1) + (heading.includes(t) ? 5 : 0);
+        return { ...sct, score };
+      }).filter((sct) => sct.score >= minScore).sort((a, b) => b.score - a.score);
+    }
     function formatFullArticle(lang, title, extract, query) {
       const text = extract.replace(wikiBackMatter(lang), '').trim();
       const header = 'Wikipedia' + (lang !== 'en' ? ' (' + languageName(lang) + ')' : '') + ' (full article): ' + title + '\n';
       if (text.length <= MAX_FULL_ARTICLE_CHARS) return header + text;
       const terms = query ? queryTerms(lang, query, title) : [];
       const sections = splitWikiSections(text);
-      const scored = sections.slice(1).map((sct, i) => {
-        const body = sct.body.toLowerCase();
-        const heading = sct.heading.toLowerCase();
-        let score = 0;
-        for (const t of terms) score += Math.min(5, body.split(t).length - 1) + (heading.includes(t) ? 5 : 0);
-        return { ...sct, i: i + 1, score };
-      }).filter((sct) => sct.score > 0).sort((a, b) => b.score - a.score);
+      const scored = scoreSections(sections, terms, 1);
       if (!scored.length) {
         const body = cutAtBoundary(text, MAX_FULL_ARTICLE_CHARS);
         return header + body + '\n\n[...truncated -- showing the first ' + body.length + ' of ' + text.length + ' characters, references excluded]';
@@ -2045,6 +2080,110 @@
       return { blob, title: chosen.title.replace(/^[^:]+:/, '') /* File:, Fichier:, ... -- the namespace is localised */ };
     }
 
+    // Going deeper after /wiki. The summary answers the first question fast,
+    // but everything past the lead used to be out of reach unless you re-ran
+    // /wiki full -- and a whole article (40-75k characters) is far beyond
+    // what a small on-device model's context can hold for long, since
+    // everything sent stays in the session for every later turn.
+    //
+    // So instead: the most recent Wikipedia article in a conversation stays
+    // "open". Its full text is prefetched in the background the moment it
+    // resolves, and each follow-up you type is matched against the sections
+    // the model HASN'T seen yet -- the best one or two (capped at
+    // FOLLOWUP_MAX_CHARS) ride along with that message, shown in the same
+    // chip before sending, removable with its ×. Nothing matches -> nothing
+    // is added. "Tell me more" -> the next unread section in article order.
+    // Sections already given are never re-sent; which ones those are is
+    // read straight back off earlier turns' fetched text ("== Heading =="
+    // lines), so it needs no extra state and survives reloads -- and those
+    // turns replay on session rebuild like any other fetched context.
+    const FOLLOWUP_MAX_CHARS = 3000;
+    const FOLLOWUP_MIN_SCORE = 3;
+    const MORE_RE = /^(?:(?:tell me |say |read )?more|go on|continue|keep going|what else|and then|next|la suite|encore|continue[sz]?)\W*$/i;
+    const articleSectionsCache = new Map(); // 'lang|title' -> Promise<sections>
+    let followupDismissed = false; // × on a follow-up chip: skip it for the rest of this message
+    function articleFromUrl(url) {
+      const m = /^https:\/\/([a-z][a-z-]{1,11})\.wikipedia\.org\/wiki\/([^?#]+)$/.exec(url || '');
+      if (!m) return null;
+      try { return { lang: m[1], title: decodeURIComponent(m[2]).replace(/_/g, ' ') }; } catch { return null; }
+    }
+    function getArticleSections(lang, title) {
+      const key = lang + '|' + title;
+      if (!articleSectionsCache.has(key)) {
+        const p = fetchFullArticleText(lang, title)
+          .then((extract) => splitWikiSections(extract.replace(wikiBackMatter(WIKI_LANGS[lang] ? lang : 'en'), '').trim()));
+        p.catch(() => articleSectionsCache.delete(key)); // a failed fetch retries next time, not cached forever
+        articleSectionsCache.set(key, p);
+      }
+      return articleSectionsCache.get(key);
+    }
+    function prefetchArticle(url) {
+      const art = articleFromUrl(url);
+      if (art) getArticleSections(art.lang, art.title).catch(() => {});
+    }
+    function openArticle(conv) {
+      for (let i = conv.messages.length - 1; i >= 0; i--) {
+        const m = conv.messages[i];
+        const art = m.role === 'user' && m.urlContext && articleFromUrl(m.urlContext.url);
+        if (!art) continue;
+        const seen = new Set();
+        for (const mm of conv.messages) {
+          if (!mm.urlContext || mm.urlContext.url !== m.urlContext.url || !mm.urlContext.text) continue;
+          for (const h of mm.urlContext.text.matchAll(/\n=+ (.+?) =+\n/g)) seen.add(h[1]);
+        }
+        return { ...art, url: m.urlContext.url, seen };
+      }
+      return null;
+    }
+    async function pickFollowupSections(art, question) {
+      const sections = await getArticleSections(art.lang, art.title);
+      // Subsection headings appear bare ("Old Town") in a first-N /wiki full
+      // extract but as "History › Old Town" here -- either form counts.
+      const isSeen = (sct) => art.seen.has(sct.heading) || art.seen.has(sct.heading.split(' › ').pop());
+      const unseen = sections.map((sct, i) => ({ ...sct, i })).slice(1).filter((sct) => !isSeen(sct));
+      if (!unseen.length) return [];
+      if (MORE_RE.test(question.trim())) return [{ ...unseen[0], body: cutAtBoundary(unseen[0].body, FOLLOWUP_MAX_CHARS) }];
+      const terms = queryTerms(WIKI_LANGS[art.lang] ? art.lang : 'en', question, art.title);
+      if (!terms.length) return [];
+      const scored = scoreSections([sections[0], ...unseen], terms, FOLLOWUP_MIN_SCORE);
+      const picked = [];
+      let budget = FOLLOWUP_MAX_CHARS;
+      for (const sct of scored.slice(0, 2)) {
+        if (budget < 400) break;
+        const body = cutAtBoundary(sct.body, budget);
+        picked.push({ ...sct, i: unseen[sct.i - 1].i, body });
+        budget -= body.length;
+      }
+      return picked.sort((a, b) => a.i - b.i);
+    }
+    async function resolveFollowupSections(trimmed, art) {
+      const myToken = ++urlContextToken;
+      try {
+        const picked = await pickFollowupSections(art, trimmed);
+        if (myToken !== urlContextToken) return;
+        clearUrlContext(); // also drops a stale /wiki image attachment if the composer used to hold that command
+        if (!picked.length) return;
+        const langTag = art.lang !== 'en' ? ' (' + art.lang + ')' : '';
+        const label = art.title + langTag + ' › ' + picked.map((sct) => sct.heading).join(', ');
+        // No revision pin here: extracts is always the current text, so
+        // claiming the earlier turn's revision would be wrong.
+        pendingUrlContext = {
+          url: art.url, label, lang: art.lang, matchedText: trimmed, followup: true,
+          text: 'Wikipedia' + (art.lang !== 'en' ? ' (' + languageName(art.lang) + ')' : '') + ': ' + art.title + ' -- further sections, relevant to this message'
+            + picked.map((sct) => '\n\n== ' + sct.heading + ' ==\n' + sct.body).join(''),
+        };
+        urlContextAltsEl.innerHTML = '';
+        urlContextChip.style.display = 'flex';
+        urlContextNameEl.textContent = '📖 ' + label;
+      } catch {
+        // A failed deeper read never blocks or delays the message itself --
+        // it just goes without the extra sections.
+        if (myToken === urlContextToken) clearUrlContext();
+      } finally {
+        if (urlContextInFlightKey === 'followup:' + trimmed) { urlContextInFlightKey = null; urlContextInFlightPromise = null; }
+      }
+    }
+
     // pendingUrlContext holds the fetched, ready-to-send context; the token
     // guards against a slow fetch resolving after the visitor has already
     // edited the URL away or typed a different one in the meantime.
@@ -2070,7 +2209,10 @@
         attachmentChip.style.display = 'none';
       }
     }
-    removeUrlContextBtn.addEventListener('click', clearUrlContext);
+    removeUrlContextBtn.addEventListener('click', () => {
+      if (pendingUrlContext && pendingUrlContext.followup) followupDismissed = true;
+      clearUrlContext();
+    });
     // The one entry point for resolving whatever's currently in the
     // composer -- called on the debounced 'input' timer AND, synchronously
     // awaited, right before actually sending (see sendChat) so a send can
@@ -2091,7 +2233,18 @@
       // Already have context queued for this exact URL -- nothing to do.
       if (pendingUrlContext && text.includes(pendingUrlContext.url)) return;
       const found = detectUrlSource(text);
-      if (!found) { urlContextInFlightKey = null; urlContextInFlightPromise = null; clearUrlContext(); return; }
+      if (!found) {
+        const art = trimmed && !followupDismissed ? openArticle(activeConv()) : null;
+        if (!art) { urlContextInFlightKey = null; urlContextInFlightPromise = null; clearUrlContext(); return; }
+        if (pendingUrlContext && pendingUrlContext.matchedText === trimmed) return;
+        const key = 'followup:' + trimmed;
+        if (key === urlContextInFlightKey) { await urlContextInFlightPromise; return; }
+        const p = resolveFollowupSections(trimmed, art);
+        urlContextInFlightKey = key;
+        urlContextInFlightPromise = p;
+        await p;
+        return;
+      }
       if (found.url === urlContextInFlightKey) { await urlContextInFlightPromise; return; }
       if (pendingUrlContext && pendingUrlContext.url === found.url) return;
       const p = fetchUrlContext(found);
@@ -2116,6 +2269,7 @@
         const json = await res.json();
         const contextText = found.src.format(json);
         pendingUrlContext = { url: found.url, label: found.label, text: contextText, ...(found.src.meta ? found.src.meta(json) : {}) };
+        prefetchArticle(found.url);
         urlContextNameEl.textContent = '🔗 ' + found.label;
       } catch (e) {
         if (myToken !== urlContextToken) return;
@@ -2172,7 +2326,7 @@
         const wikiSrc = URL_SOURCES.find((s) => s.id === 'wikipedia');
         const candidate = candidates.find((c) => !c.disambiguation);
         if (!candidate) throw new Error('only found a disambiguation page ("' + candidates[0].title + '") -- try being more specific');
-        const langTag = lang !== 'en' ? ' (' + lang + ')' : '';
+        const langTag = (lang !== 'en' ? ' (' + lang + ')' : '') + (candidate.via && candidate.via !== candidate.title ? ' via "' + candidate.via + '"' : '');
         const alternatives = candidates.filter((c) => !c.disambiguation && c !== candidate).slice(0, 2);
         urlContextNameEl.textContent = 'Fetching ' + candidate.title + '…';
         const res = await fetch(wikiHost(lang) + '/api/rest_v1/page/summary/' + encodeURIComponent(candidate.title.replace(/ /g, '_')), { headers: WIKIMEDIA_HEADERS });
@@ -2209,6 +2363,7 @@
           urlContextNameEl.textContent = '🔗 ' + label;
         }
         if (!forcedCandidate) showWikiAlternatives(alternatives, trimmed, cmd);
+        prefetchArticle(resolved.candidate.url);
       } catch (e) {
         if (myToken !== urlContextToken) return;
         pendingUrlContext = null;
@@ -2468,6 +2623,7 @@
       attachInput.value = '';
       attachmentChip.style.display = 'none';
       clearUrlContext();
+      followupDismissed = false;
       await sendText(text, attachment, null, undefined, urlContext);
     }
 
