@@ -337,7 +337,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-01 14:46 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-26 08:26 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -2332,30 +2332,37 @@
     const SECTION_PICK_PROMPT = 'You choose which section of an encyclopedia article is most likely to answer a question. Reply only with the section number, or 0 if none is likely to help.';
     async function modelPickSection(art, question, unseen) {
       const list = unseen.slice(0, 60);
+      const text = 'Article: ' + art.title + '\nQuestion: ' + question + '\nSections:\n' + list.map((sct, k) => (k + 1) + '. ' + sct.heading).join('\n');
       throwawaySessionsInFlight++;
+      let session;
       try {
-        const session = await withTimeout(LanguageModel.create({ initialPrompts: [{ role: 'system', content: SECTION_PICK_PROMPT }], ...(chatLangs ? { expectedInputs: [{ type: 'text', languages: chatLangs }] } : {}) }), 5000);
+        session = await withTimeout(LanguageModel.create({ initialPrompts: [{ role: 'system', content: SECTION_PICK_PROMPT }], ...(chatLangs ? { expectedInputs: [{ type: 'text', languages: chatLangs }] } : {}) }), 5000);
+        let raw;
         try {
-          const raw = await withTimeout(session.prompt(
-            'Article: ' + art.title + '\nQuestion: ' + question + '\nSections:\n' + list.map((sct, k) => (k + 1) + '. ' + sct.heading).join('\n'),
-            // A bare integer, not {"section": n}: on a local stand-in the
-            // object form took 6-20s per reply vs ~0.1s for the integer,
-            // for the same answer. (Chrome's own constrained decoding may
-            // differ -- still the smaller constraint to satisfy.)
-            { responseConstraint: { type: 'integer', minimum: 0, maximum: list.length } }
-          ), 8000);
-          // Accept {"section": 6}, a bare 6, or "6." -- confirmed with a
-          // local stand-in model that a schema-constrained reply can still
-          // come back as a bare number, which is valid JSON with no
-          // .section, and used to be silently read as "no pick".
-          let n = NaN;
-          try { const v = JSON.parse(raw); n = typeof v === 'number' ? v : v && v.section; } catch {}
-          if (!Number.isInteger(n)) n = parseInt((/\d+/.exec(raw) || [])[0], 10);
-          return n >= 1 && n <= list.length ? list[n - 1] : null;
-        } finally {
-          try { session.destroy(); } catch {}
+          // A bare integer, not {"section": n}: on a local stand-in the
+          // object form took 6-20s per reply vs ~0.1s for the integer,
+          // for the same answer.
+          raw = await withTimeout(session.prompt(text, { responseConstraint: { type: 'integer', minimum: 0, maximum: list.length } }), 8000);
+        } catch (e) {
+          // A build that rejects the constraint shouldn't cost the pick:
+          // retry once unconstrained -- the parser below copes with prose.
+          if (e && e.message === 'timed out') throw e;
+          console.warn('[chrome-chat] section pick: constrained prompt failed, retrying unconstrained --', e);
+          raw = await withTimeout(session.prompt(text), 8000);
         }
-      } catch { return null; } finally {
+        // Accept {"section": 6}, a bare 6, or "6." -- a schema-constrained
+        // reply can still come back as a bare number, which is valid JSON
+        // with no .section, and used to be silently read as "no pick".
+        let n = NaN;
+        try { const v = JSON.parse(raw); n = typeof v === 'number' ? v : v && v.section; } catch {}
+        if (!Number.isInteger(n)) n = parseInt((/\d+/.exec(raw) || [])[0], 10);
+        if (!(n >= 1 && n <= list.length)) console.warn('[chrome-chat] section pick: model chose none --', JSON.stringify(raw));
+        return n >= 1 && n <= list.length ? list[n - 1] : null;
+      } catch (e) {
+        console.warn('[chrome-chat] section pick failed --', e);
+        return null;
+      } finally {
+        try { session && session.destroy(); } catch {}
         throwawaySessionsInFlight--;
       }
     }
@@ -2650,7 +2657,7 @@
         picked = await pickFollowupSections({ ...art, url: ctx.url, seen: new Set() }, ctx.question, atSend && {
           onModelPick() { if (pendingUrlContext === ctx) urlContextNameEl.textContent = '📖 Finding the part of ' + art.title + ' that answers this…'; },
         });
-      } catch { picked = []; }
+      } catch (e) { console.warn('[chrome-chat] /wiki answer-section lookup failed --', e); picked = []; }
       if (myToken !== urlContextToken || pendingUrlContext !== ctx) return;
       // Weak or no match while typing -> decide again at send, with the model.
       ctx.sectionsDecided = atSend || (picked.length > 0 && picked.every((sct) => sct.strong));
