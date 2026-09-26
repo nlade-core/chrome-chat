@@ -681,6 +681,26 @@
     // themselves.
     let wikiImageOwnsAttachment = false;
 
+    // Chrome warns when a session doesn't declare its languages, and French
+    // is now a common input (French Wikipedia articles) and output. Declared
+    // only if availability() confirms this build supports it -- a build that
+    // doesn't would otherwise reject create() and take the whole chat down.
+    // Resolved once at startup; until then (or if unsupported) sessions are
+    // created exactly as before.
+    const CHAT_LANGUAGES = ['en', 'fr'];
+    let chatLangs = null;
+    async function detectChatLanguages() {
+      try {
+        const a = await withTimeout(LanguageModel.availability({ expectedInputs: [{ type: 'text', languages: CHAT_LANGUAGES }], expectedOutputs: [{ type: 'text', languages: CHAT_LANGUAGES }] }), 3000);
+        return a === 'unavailable' ? null : CHAT_LANGUAGES;
+      } catch { return null; }
+    }
+    function chatSessionIO() {
+      return {
+        expectedInputs: [{ type: 'text', ...(chatLangs ? { languages: chatLangs } : {}) }, { type: 'image' }, { type: 'audio' }],
+        ...(chatLangs ? { expectedOutputs: [{ type: 'text', languages: chatLangs }] } : {}),
+      };
+    }
     let modelAvailability = null; // the raw availability() string, kept around so prewarming/landing messaging can reuse it instead of re-querying
     async function checkCapability() {
       if (!self.LanguageModel) {
@@ -700,6 +720,7 @@
       }
       if (promptOk) chatSendBtn.disabled = false;
       else chatNote.textContent = 'The Prompt API isn\'t available in this browser right now.';
+      if (promptOk) chatLangs = await detectChatLanguages();
       maybePrewarmSession();
     }
     checkCapability();
@@ -727,7 +748,7 @@
       const startedAt = performance.now();
       const promise = LanguageModel.create({
         initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }],
-        expectedInputs: [{ type: 'text' }, { type: 'image' }, { type: 'audio' }],
+        ...chatSessionIO(),
       }).then((session) => ({ session, createMs: Math.round(performance.now() - startedAt) }));
       prewarm = { promise };
       promise.then(
@@ -1487,7 +1508,7 @@
       try {
         conv.session = await LanguageModel.create({
           initialPrompts: buildInitialPrompts(conv.messages),
-          expectedInputs: [{ type: 'text' }, { type: 'image' }, { type: 'audio' }],
+          ...chatSessionIO(),
           // Same download-progress feedback sendText's session creation
           // already has -- without this, reopening a saved thread on a
           // device that hasn't downloaded the model yet just sat there
@@ -1876,7 +1897,7 @@
     function parseWikiCommand(text) {
       const m = /^\/wiki(?::([a-z][a-z-]{1,11}))?(?:\s+(full|image)(?=\s))?\s+(\S[\s\S]*)$/i.exec((text || '').trim());
       if (!m) return null;
-      return { lang: (m[1] || 'en').toLowerCase(), mode: m[2] ? m[2].toLowerCase() : 'summary', query: m[3].trim() };
+      return { lang: m[1] ? m[1].toLowerCase() : null, mode: m[2] ? m[2].toLowerCase() : 'summary', query: m[3].trim() };
     }
     // A full article can run 40,000+ characters (confirmed: Eiffel Tower's
     // plain-text extract is ~45,000) -- nowhere close to fitting a small
@@ -1907,30 +1928,37 @@
     // request, no extra round trip. Confirmed live: Telephone -> Téléphone,
     // Edinburgh Castle -> Château d'Édimbourg. Hits with no French article
     // are dropped. An exact French title still wins first either way.
+    // Works in both directions: "/wiki:en qui a inventé le téléphone"
+    // searches French and hops to English the same way.
     async function resolveWikiCandidates(lang, query, limit) {
-      const hop = lang !== 'en' && looksEnglish(query, lang);
+      const qLang = detectLang(query);
+      const hopFrom = qLang && qLang !== lang && WIKI_LANGS[qLang] ? qLang : null;
       const [exact, fulltext, hopExact, hopFull] = await Promise.all([
         wikiSearch(lang, query, 1, 'nearmatch'),
-        hop ? [] : wikiSearch(lang, query, limit),
-        hop ? wikiSearch('en', query, 1, 'nearmatch', lang) : [],
-        hop ? wikiSearch('en', query, limit, null, lang) : [],
+        hopFrom ? [] : wikiSearch(lang, query, limit),
+        hopFrom ? wikiSearch(hopFrom, query, 1, 'nearmatch', lang) : [],
+        hopFrom ? wikiSearch(hopFrom, query, limit, null, lang) : [],
       ]);
       const seen = new Set();
       return [...exact, ...hopExact, ...hopFull, ...fulltext].filter((c) => !seen.has(c.title) && seen.add(c.title));
     }
-    // Cheap language guess from function words alone -- no model, no
-    // download. Only has to answer "is this English rather than <lang>?"
-    // for the hop above; a bare proper noun ("edinburgh") scores 0-0 and
-    // stays a native search, where an exact-title/redirect match usually
-    // catches it anyway.
+    // Cheap language guess from function words (plus French accents) --
+    // no model, no download, instant, which matters because it runs on
+    // every debounced keystroke. Only ever has to tell apart the languages
+    // this app actually handles; returns null when it can't tell (a bare
+    // proper noun like "edinburgh" scores 0-0), and callers treat null as
+    // "don't switch anything".
     const FUNCTION_WORDS = {
       en: 'the of and is are was were who what when where why how does did in on to a an it its with about',
       fr: 'le la les des du de un une est sont qui que quoi quand comment pourquoi où et au aux dans sur avec quel quelle',
     };
-    function looksEnglish(query, lang) {
-      const words = query.toLowerCase().split(/[^\p{L}\p{N}]+/u);
-      const count = (l) => { const set = new Set((FUNCTION_WORDS[l] || '').split(' ')); return words.filter((w) => set.has(w)).length; };
-      return count('en') > count(lang);
+    function detectLang(text) {
+      const lower = (text || '').toLowerCase();
+      const words = lower.split(/[^\p{L}\p{N}]+/u);
+      const count = (l) => { const set = new Set(FUNCTION_WORDS[l].split(' ')); return words.filter((w) => set.has(w)).length; };
+      const en = count('en');
+      const fr = count('fr') + (/[éèêëàâçùûüîïôœ]/.test(lower) ? 1 : 0);
+      return en > fr ? 'en' : fr > en ? 'fr' : null;
     }
     async function wikiSearch(lang, query, limit, what, linkTo) {
       const res = await fetch(wikiHost(lang) + '/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent(query) + '&gsrlimit=' + limit + (what ? '&gsrwhat=' + what : '') + '&redirects=1&prop=pageprops' + (linkTo ? '|langlinks&lllang=' + linkTo + '&lllimit=max' : '') + '&ppprop=disambiguation&format=json&origin=*', { headers: WIKIMEDIA_HEADERS });
@@ -1941,7 +1969,7 @@
         const disambiguation = !!(p.pageprops && 'disambiguation' in p.pageprops);
         if (!linkTo) return { title: p.title, url: wikiArticleUrl(lang, p.title), disambiguation };
         const link = p.langlinks && p.langlinks[0];
-        return link ? { title: link['*'], url: wikiArticleUrl(linkTo, link['*']), disambiguation, via: p.title } : null;
+        return link ? { title: link['*'], url: wikiArticleUrl(linkTo, link['*']), disambiguation, via: p.title, viaLang: lang } : null;
       }).filter(Boolean);
     }
     async function fetchFullArticleText(lang, title) {
@@ -2101,6 +2129,62 @@
     const FOLLOWUP_MIN_SCORE = 3;
     const MORE_RE = /^(?:(?:tell me |say |read )?more|go on|continue|keep going|what else|and then|next|la suite|encore|continue[sz]?)\W*$/i;
     const articleSectionsCache = new Map(); // 'lang|title' -> Promise<sections>
+    // Translator API -- a separate, small on-device translation model, not
+    // Gemini Nano. Used for exactly one thing: turning a follow-up question
+    // into the article's language so its words can match the article's
+    // section text ("economy" never matches "Économie"). The model itself
+    // still gets the question as typed -- it reads French natively.
+    // Downloading a language pack needs a user gesture, so outside a send
+    // (e.g. on the typing debounce) only an already-downloaded pair is used;
+    // at send time a missing pair starts downloading in the background and
+    // THIS message simply goes without -- never blocks on a download.
+    const translators = new Map(); // 'en>fr' -> Promise<Translator>
+    async function translateForMatching(text, from, to) {
+      if (!self.Translator) return null;
+      const key = from + '>' + to;
+      try {
+        if (!translators.has(key)) {
+          const avail = await Translator.availability({ sourceLanguage: from, targetLanguage: to });
+          if (avail === 'unavailable') return null;
+          if (avail !== 'available' && !(navigator.userActivation && navigator.userActivation.isActive)) return null;
+          const p = Translator.create({ sourceLanguage: from, targetLanguage: to });
+          p.catch(() => translators.delete(key));
+          translators.set(key, p);
+          if (avail !== 'available') return null;
+        }
+        return await withTimeout(translators.get(key).then((t) => t.translate(text)), 3000);
+      } catch { return null; }
+    }
+    // Last resort, send-time only: word matching found nothing, but the
+    // message is plainly a question -- so show Gemini Nano the unread
+    // section TITLES (no content) and let it pick one. This is the piece
+    // word overlap can't do: "besieged" -> "Lang Siege", or an English
+    // question against French headings when no translation pack is there
+    // yet. One short, structured call (responseConstraint pins the reply to
+    // a single integer), on a throwaway session like title generation, and
+    // never on the typing debounce -- that would fire a model call per pause.
+    const QUESTION_RE = /\?\s*$|^(?:who|what|when|where|why|how|which|is|are|was|were|does|did|can|qui|que|quoi|quand|où|pourquoi|comment|quel|quelle|quels|quelles|est-ce)\b/i;
+    const SECTION_PICK_PROMPT = 'You choose which section of an encyclopedia article is most likely to answer a question. Reply only with the section number, or 0 if none is likely to help.';
+    async function modelPickSection(art, question, unseen) {
+      const list = unseen.slice(0, 60);
+      throwawaySessionsInFlight++;
+      try {
+        const session = await withTimeout(LanguageModel.create({ initialPrompts: [{ role: 'system', content: SECTION_PICK_PROMPT }], ...(chatLangs ? { expectedInputs: [{ type: 'text', languages: chatLangs }] } : {}) }), 5000);
+        try {
+          const raw = await withTimeout(session.prompt(
+            'Article: ' + art.title + '\nQuestion: ' + question + '\nSections:\n' + list.map((sct, k) => (k + 1) + '. ' + sct.heading).join('\n'),
+            { responseConstraint: { type: 'object', properties: { section: { type: 'integer', minimum: 0, maximum: list.length } }, required: ['section'] } }
+          ), 8000);
+          let n;
+          try { n = JSON.parse(raw).section; } catch { n = parseInt((/\d+/.exec(raw) || [])[0], 10); }
+          return n >= 1 && n <= list.length ? list[n - 1] : null;
+        } finally {
+          try { session.destroy(); } catch {}
+        }
+      } catch { return null; } finally {
+        throwawaySessionsInFlight--;
+      }
+    }
     let followupDismissed = false; // × on a follow-up chip: skip it for the rest of this message
     function articleFromUrl(url) {
       const m = /^https:\/\/([a-z][a-z-]{1,11})\.wikipedia\.org\/wiki\/([^?#]+)$/.exec(url || '');
@@ -2135,7 +2219,7 @@
       }
       return null;
     }
-    async function pickFollowupSections(art, question) {
+    async function pickFollowupSections(art, question, atSend) {
       const sections = await getArticleSections(art.lang, art.title);
       // Subsection headings appear bare ("Old Town") in a first-N /wiki full
       // extract but as "History › Old Town" here -- either form counts.
@@ -2143,9 +2227,23 @@
       const unseen = sections.map((sct, i) => ({ ...sct, i })).slice(1).filter((sct) => !isSeen(sct));
       if (!unseen.length) return [];
       if (MORE_RE.test(question.trim())) return [{ ...unseen[0], body: cutAtBoundary(unseen[0].body, FOLLOWUP_MAX_CHARS) }];
-      const terms = queryTerms(WIKI_LANGS[art.lang] ? art.lang : 'en', question, art.title);
-      if (!terms.length) return [];
-      const scored = scoreSections([sections[0], ...unseen], terms, FOLLOWUP_MIN_SCORE);
+      // Question in a different language from the article -> match on its
+      // translation (falls back to the original if no translation pack).
+      // Untranslated cross-language word matching is worse than none:
+      // confirmed live, "economy" against French Édimbourg matched
+      // "Personnalités". So without a translation, skip straight to the
+      // send-time model pick below, which reads headings in any language.
+      const qLang = detectLang(question);
+      const crossLang = qLang && qLang !== art.lang && WIKI_LANGS[art.lang];
+      const matchText = crossLang ? await translateForMatching(question, qLang, art.lang) : question;
+      const terms = matchText ? queryTerms(WIKI_LANGS[art.lang] ? art.lang : 'en', matchText, art.title) : [];
+      const scored = terms.length ? scoreSections([sections[0], ...unseen], terms, FOLLOWUP_MIN_SCORE) : [];
+      if (!scored.length) {
+        if (!atSend || !QUESTION_RE.test(question.trim())) return [];
+        if (atSend.onModelPick) atSend.onModelPick();
+        const hit = await modelPickSection(art, question, unseen);
+        return hit ? [{ ...hit, body: cutAtBoundary(hit.body, FOLLOWUP_MAX_CHARS), picker: 'model' }] : [];
+      }
       const picked = [];
       let budget = FOLLOWUP_MAX_CHARS;
       for (const sct of scored.slice(0, 2)) {
@@ -2156,10 +2254,16 @@
       }
       return picked.sort((a, b) => a.i - b.i);
     }
-    async function resolveFollowupSections(trimmed, art) {
+    async function resolveFollowupSections(trimmed, art, atSend) {
       const myToken = ++urlContextToken;
       try {
-        const picked = await pickFollowupSections(art, trimmed);
+        const picked = await pickFollowupSections(art, trimmed, atSend && {
+          onModelPick() {
+            if (myToken !== urlContextToken) return;
+            urlContextChip.style.display = 'flex';
+            urlContextNameEl.textContent = '📖 Finding the right section of ' + art.title + '…';
+          },
+        });
         if (myToken !== urlContextToken) return;
         clearUrlContext(); // also drops a stale /wiki image attachment if the composer used to hold that command
         if (!picked.length) return;
@@ -2217,7 +2321,7 @@
     // composer -- called on the debounced 'input' timer AND, synchronously
     // awaited, right before actually sending (see sendChat) so a send can
     // never race ahead of a resolution that's already started.
-    async function maybeFetchUrlContext() {
+    async function maybeFetchUrlContext(atSend) {
       const text = chatInput.value;
       const trimmed = text.trim();
       const cmd = parseWikiCommand(trimmed);
@@ -2238,8 +2342,8 @@
         if (!art) { urlContextInFlightKey = null; urlContextInFlightPromise = null; clearUrlContext(); return; }
         if (pendingUrlContext && pendingUrlContext.matchedText === trimmed) return;
         const key = 'followup:' + trimmed;
-        if (key === urlContextInFlightKey) { await urlContextInFlightPromise; return; }
-        const p = resolveFollowupSections(trimmed, art);
+        if (key === urlContextInFlightKey) { await urlContextInFlightPromise; if (!atSend || pendingUrlContext) return; }
+        const p = resolveFollowupSections(trimmed, art, atSend);
         urlContextInFlightKey = key;
         urlContextInFlightPromise = p;
         await p;
@@ -2306,7 +2410,14 @@
         urlContextAltsEl.append(btn);
       }
     }
-    async function resolveWikiSlashCommand(trimmed, cmd, forcedCandidate) {
+    // Plain /wiki (no :xx) searches the edition matching the language the
+    // query is written in -- "/wiki qui a construit la tour eiffel" goes to
+    // French Wikipedia with no extra syntax, because French words are what
+    // French Wikipedia's index can actually match. Anything undetectable or
+    // English stays English. /wiki:en and /wiki:fr always win.
+    async function resolveWikiSlashCommand(trimmed, rawCmd, forcedCandidate) {
+      const detected = detectLang(rawCmd.query);
+      const cmd = { ...rawCmd, lang: rawCmd.lang || (detected && WIKI_LANGS[detected] ? detected : 'en') };
       const { lang, mode, query } = cmd;
       const myToken = ++urlContextToken;
       urlContextAltsEl.innerHTML = '';
@@ -2560,7 +2671,7 @@
           // silently forget context that should still be there.
           conv.session = await LanguageModel.create({
             initialPrompts: buildInitialPrompts(conv.messages.slice(0, -1)),
-            expectedInputs: [{ type: 'text' }, { type: 'image' }, { type: 'audio' }],
+            ...chatSessionIO(),
             monitor(m) {
               m.addEventListener('downloadprogress', (e) => {
                 if (isShown()) chatNote.textContent = 'Downloading model… ' + Math.round(e.loaded * 100) + '%';
@@ -2597,7 +2708,7 @@
       sendChatGuardActive = true;
       try {
         clearTimeout(urlContextDebounceTimer);
-        await maybeFetchUrlContext();
+        await maybeFetchUrlContext(true);
       } finally {
         sendChatGuardActive = false;
       }
