@@ -337,7 +337,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-27 13:01 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-27 13:04 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -2146,7 +2146,13 @@
     let offlineConnecting = null;    // single-flight open
     let offlineNeedsPermission = null; // a remembered handle waiting on a gesture
     let offlineServerPromise = null; // route A, probed once
+    // Route A only exists when offline/serve.py serves the page, which is
+    // always on this machine -- so don't probe for it anywhere else. (The
+    // public-site test caught the probe as a stray request to
+    // nlade-core.github.io/kiwix/book mid-question.)
+    const SERVED_LOCALLY = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
     function serverBackend() {
+      if (!SERVED_LOCALLY) return Promise.resolve(null);
       if (!offlineServerPromise) {
         offlineServerPromise = fetch('/kiwix/book').then((r) => (r.ok ? r.text() : null))
           .then((b) => (b && b.trim() && !/</.test(b) ? httpBackend(b.trim()) : null)).catch(() => null);

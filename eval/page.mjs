@@ -62,6 +62,7 @@ export async function loadPage(model, { constrain = true } = {}) {
     'function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error("timed out")), ms))]); }',
     'let throwawaySessionsInFlight = 0; let chatLangs = ["en", "fr"];',
     'const self = globalThis;',
+    'const location = { hostname: "localhost", origin: "http://localhost" };',
     code,
     'export { ' + exported.join(', ') + ' };',
   ].join('\n'));
