@@ -46,14 +46,28 @@ export const PROMPT_TOOLS = 'You are a helpful, concise assistant. You cannot se
   + 'So if a question needs counting, arithmetic or a date or time calculation, never work it out in your head: think briefly about what to compute, '
   + 'then write one ```python code block (standard library only) that prints ONLY the final answer. It will be run for you and its output shown. '
   + 'Give dates as YYYY-MM-DD and weekdays as English names. If the question needs no calculation, answer it directly and briefly, with no code.';
+// Added after the first stand-in run, which showed the model skipping code when
+// it felt sure (strawberry: answered "2" in its head, 0/3): same prompt, but any
+// question involving letters, numbers, dates or times must go through code.
+export const PROMPT_TOOLS_STRICT = PROMPT_TOOLS.replace('So if a question needs counting, arithmetic or a date or time calculation, never work it out in your head:',
+  'So for ANY question that involves counting letters, numbers, arithmetic, percentages, dates or times -- even if it looks easy and even if you think you know the answer -- never work it out in your head:');
 export const PROMPT_PLAIN = 'You are a helpful, concise assistant.';
 
+// The nudge (added with the strict prompt): plain code spots a question with
+// something to compute -- a digit, or a quoted word plus letters/counting --
+// and, if the reply came back without code, asks once more for the code.
+// (Month/weekday names and bare quotes were tried first and nudged the
+// near-misses "Translate "good morning"" and "...moved to thursday" into code.)
+export const looksComputable = (q) => /\d/.test(q) || (/"[^"]+"/.test(q) && /\b(letters?|how many|count)\b/i.test(q));
+export const NUDGE = 'Please answer that with a ```python code block that prints only the final answer, as instructed.';
 export const extractPython = (reply) => (/```(?:python|py)?[ \t]*\n([\s\S]*?)```/i.exec(reply || '') || [])[1] || null;
 
 // Pass/fail in plain code. For a code answer `out` is what the code printed;
 // otherwise it's the model's own reply.
+const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
 export function check(c, out) {
-  const s = String(out || '').toLowerCase();
+  // Small number words count too ("eight legs"). Fixed after the first run, which scored that as a miss.
+  const s = String(out || '').toLowerCase().replace(/\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/g, (w) => ' ' + WORDS.indexOf(w) + ' ');
   if (c.num != null) {
     const nums = (s.replace(/(\d),(?=\d{3})/g, '$1').match(/-?\d+(?:\.\d+)?/g) || []);
     if (typeof c.num === 'bigint') return nums.some((n) => /^\d+$/.test(n) && BigInt(n) === c.num);

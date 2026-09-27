@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Compute lab</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  * { margin: 0; padding: 0; }
+  :root { --bg: #fff; --fg: #111; --muted: #6e6e80; --border: #e5e5e5; --accent: #0a58ca; --accent-fg: #fff; --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e; --code: #f6f8fa; color-scheme: light; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #1b1b1d; --fg: #ececf1; --muted: #9b9b9b; --border: #3a3a3a; --accent: #6ea8fe; --accent-fg: #0d1117; --ok: #3fb950; --warn: #d29922; --bad: #ff7b72; --code: #26262a; color-scheme: dark; } }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 1.35rem; } h2 { font-size: 1.05rem; margin: 22px 0 8px; } h3 { font-size: 0.95rem; margin-bottom: 6px; } h4 { font-size: 0.85rem; margin: 10px 0 4px; color: var(--muted); }
+  p { margin: 6px 0; } .muted { color: var(--muted); font-size: 0.85rem; } .ok { color: var(--ok); font-weight: 600; } .mixed { color: var(--warn); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; }
+  button, select, input, textarea { font: inherit; } button { cursor: pointer; padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--fg); }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; } button:disabled { opacity: 0.45; cursor: default; }
+  select, input[type=text] { padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg); max-width: 100%; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  .status { font-variant-numeric: tabular-nums; min-height: 1.5em; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; } th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tbody tr { cursor: pointer; } tbody tr:hover { background: var(--code); }
+  td:nth-child(3) { min-width: 240px; } td:last-child { overflow-wrap: anywhere; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--code); border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 0.82rem; margin: 4px 0; }
+  #detail { margin-top: 12px; } textarea { width: 100%; min-height: 200px; }
+  #free-q { flex: 1; min-width: 240px; }
+</style>
+</head>
+<body>
+  <h1>Compute lab: reasoning + Python on the on-device model</h1>
+  <p class="muted">The model reasons and writes a little Python for anything it would otherwise get wrong in its head (letters, sums, dates); Python (Pyodide) runs it in this page, in a worker with its network access removed. Plain code scores the answers. Python loads once from cdn.jsdelivr.net (~12 MB); after that the page's request counter below should stay at 0. (It can't see inside the Python worker; there the network functions are removed after loading, and a test that tries <code>fetch</code> and Pyodide's URL loader from Python gets errors.) Lab page for manual checks — part of <a href="../">chrome-chat</a>.</p>
+  <p><span id="model">Checking the model…</span> · <span id="py">Python not loaded</span> · <span id="net"></span></p>
+
+  <h2>Run the test set</h2>
+  <div class="bar">
+    <button class="primary" id="run-all">Run all 24</button>
+    <select id="pick"></select><button id="run-one">Run this one</button>
+    <label>runs each <select id="runs"><option>1</option><option selected>3</option><option>5</option></select></label>
+    <label><input type="checkbox" id="strict" checked> strict tool prompt</label>
+    <label><input type="checkbox" id="nudge" checked> nudge if no code</label>
+    <label><input type="checkbox" id="do-plain" checked> also ask without tools (baseline)</label>
+    <button id="stop" disabled>Stop</button>
+    <button id="copy">Copy results</button>
+  </div>
+  <p class="status" id="status">Ready.</p>
+  <p id="totals" class="muted"></p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>#</th><th>kind</th><th>question</th><th>with tools</th><th>used code</th><th>repaired</th><th>plain</th><th>model ms</th><th>first answer</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  </div>
+  <textarea id="report" hidden readonly></textarea>
+  <div id="detail"></div>
+
+  <h2>Try your own question</h2>
+  <div class="bar"><input type="text" id="free-q" placeholder="e.g. How many Sundays are there in 2027?"><button id="free-go">Ask</button></div>
+  <div id="free-out"></div>
+
+  <script type="module" src="compute.js"></script>
+</body>
+</html>
