@@ -41,28 +41,52 @@ async function runPython(code, ms = 10000) {
 
 // ------------------------------------------------------------------ model
 
+// Every model call is really cancelled on timeout (AbortController + destroying
+// the session). The first real-Nano run stalled after question 5: a timeout
+// that only stopped *waiting* left the call running, and later calls queued
+// behind it.
+const MODEL_MS = Number(new URLSearchParams(location.search).get('modelms')) || 45000; // ?modelms= for testing
 async function ask(system, text, onText) {
-  const s = await withTimeout(LanguageModel.create({ initialPrompts: [{ role: 'system', content: system }], ...IO,
-    monitor(m) { m.addEventListener('downloadprogress', (e) => { $('status').textContent = 'Downloading the model… ' + Math.round(e.loaded * 100) + '%'; }); } }), 120000, 'Starting the model');
-  const t0 = performance.now();
-  let reply = '';
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(new Error('The model timed out after ' + MODEL_MS / 1000 + ' s')), MODEL_MS);
+  // Stop waiting at the timeout even if a call ignores the abort signal.
+  const gaveUp = new Promise((_, reject) => ctl.signal.addEventListener('abort', () => reject(ctl.signal.reason)));
+  gaveUp.catch(() => {});
+  let s;
   try {
-    for await (const chunk of s.promptStreaming(text)) { reply += chunk; if (onText) onText(reply); }
-  } catch (e) { s.destroy(); throw e; }
-  return { session: s, reply, ms: Math.round(performance.now() - t0) };
+    s = await Promise.race([gaveUp, LanguageModel.create({ initialPrompts: [{ role: 'system', content: system }], ...IO, signal: ctl.signal,
+      monitor(m) { m.addEventListener('downloadprogress', (e) => { $('status').textContent = 'Downloading the model… ' + Math.round(e.loaded * 100) + '%'; }); } })]);
+    const t0 = performance.now();
+    let reply = '';
+    await Promise.race([gaveUp, (async () => { for await (const chunk of s.promptStreaming(text, { signal: ctl.signal })) { reply += chunk; if (onText) onText(reply); } })()]);
+    return { session: s, reply, ms: Math.round(performance.now() - t0) };
+  } catch (e) {
+    try { s && s.destroy(); } catch {}
+    throw ctl.signal.aborted && ctl.signal.reason instanceof Error ? ctl.signal.reason : e;
+  } finally { clearTimeout(timer); }
+}
+// A follow-up turn (nudge, repair) on the same session, with the same real cancel.
+async function followUp(session, text) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(new Error('The model timed out after ' + MODEL_MS / 1000 + ' s')), MODEL_MS);
+  const gaveUp = new Promise((_, reject) => ctl.signal.addEventListener('abort', () => reject(ctl.signal.reason)));
+  gaveUp.catch(() => {});
+  try { return await Promise.race([gaveUp, session.prompt(text, { signal: ctl.signal })]); }
+  catch (e) { throw ctl.signal.aborted && ctl.signal.reason instanceof Error ? ctl.signal.reason : e; }
+  finally { clearTimeout(timer); }
 }
 
 // One question through the tools pipeline: reason -> code -> run -> (one repair) -> answer.
 async function withTools(q, onText) {
   const r = { reply: '', code: null, out: null, err: null, repaired: false, modelMs: 0, pyMs: 0 };
-  const { session, reply, ms } = await withTimeout(ask($('strict').checked ? PROMPT_TOOLS_STRICT : PROMPT_TOOLS, q, onText), 90000, 'The model');
+  const { session, reply, ms } = await ask($('strict').checked ? PROMPT_TOOLS_STRICT : PROMPT_TOOLS, q, onText);
   Object.assign(r, { reply, modelMs: ms });
   try {
     r.code = extractPython(reply);
     if (!r.code && $('nudge').checked && looksComputable(q)) {
       r.nudged = true;
       const t0 = performance.now();
-      r.reply = reply + '\n\n[nudged: ' + NUDGE + ']\n\n' + await withTimeout(session.prompt(NUDGE), 60000, 'The nudge');
+      r.reply = reply + '\n\n[nudged: ' + NUDGE + ']\n\n' + await followUp(session, NUDGE);
       r.modelMs += Math.round(performance.now() - t0);
       r.code = extractPython(r.reply.split('[nudged: ').pop());
     }
@@ -72,7 +96,7 @@ async function withTools(q, onText) {
     if (!run.ok) {
       r.err = run.err; r.repaired = true;
       const t0 = performance.now();
-      const fix = await withTimeout(session.prompt('That code failed with this error:\n' + run.err + '\nReply with only a corrected ```python code block.'), 60000, 'The repair');
+      const fix = await followUp(session, 'That code failed with this error:\n' + run.err + '\nReply with only a corrected ```python code block.');
       r.modelMs += Math.round(performance.now() - t0);
       const code2 = extractPython(fix);
       if (code2) { r.code2 = code2; run = await runPython(code2); r.pyMs += run.ms; }
@@ -84,7 +108,7 @@ async function withTools(q, onText) {
   } finally { try { session.destroy(); } catch {} }
 }
 async function plain(q) {
-  const { session, reply, ms } = await withTimeout(ask(PROMPT_PLAIN, q + ' Answer briefly.'), 90000, 'The model');
+  const { session, reply, ms } = await ask(PROMPT_PLAIN, q + ' Answer briefly.');
   try { session.destroy(); } catch {}
   return { reply, ms };
 }
@@ -103,7 +127,8 @@ function renderRow(c) {
   tr.textContent = '';
   const t = r.tools, p = r.plain;
   const n = (arr, f) => arr.filter(f).length + '/' + arr.length;
-  const cells = [c.id, c.code ? 'compute' : 'direct', c.q,
+  const errs = t.filter((x) => x.failed).length;
+  const cells = [c.id, c.code ? 'compute' : 'direct', c.q + (errs ? '  [' + errs + ' model error' + (errs > 1 ? 's' : '') + ']' : ''),
     t.length ? n(t, (x) => x.pass) : '', t.length ? n(t, (x) => !!x.code) : '', t.length ? n(t, (x) => x.repaired) : '',
     p.length ? n(p, (x) => x.pass) : '',
     t.length ? String(Math.round(t.reduce((s, x) => s + x.modelMs, 0) / t.length)) : '',
@@ -145,9 +170,9 @@ function renderTotals() {
     + ' · near-misses — false triggers ' + t.falseTriggers + ', right with tools ' + t.directTools + ', plain ' + t.directPlain + ' · repairs ' + t.repaired;
 }
 
-async function runCases(list) {
+async function runCases(list, resume = false) {
   stop = false;
-  $('run-all').disabled = $('run-one').disabled = true; $('stop').disabled = false;
+  $('run-all').disabled = $('run-one').disabled = $('resume').disabled = true; $('stop').disabled = false;
   const runs = Number($('runs').value), doPlain = $('do-plain').checked;
   try {
     if (!worker) { $('status').textContent = 'Loading Python (first time: ~12 MB)…'; const t0 = performance.now(); await startWorker(); $('py').textContent = 'Python ' + pyInfo.version + ' ready in ' + Math.round(performance.now() - t0) + ' ms'; }
@@ -155,12 +180,12 @@ async function runCases(list) {
       if (stop) break;
       if (!results.has(c.id)) results.set(c.id, { tools: [], plain: [] });
       const r = results.get(c.id);
-      for (let i = 0; i < runs && !stop; i++) {
+      for (let i = resume ? r.tools.length : 0; i < runs && !stop; i++) {
         $('status').textContent = '#' + c.id + ' run ' + (i + 1) + '/' + runs + ': asking the model…';
         try {
           const x = await withTools(c.q, (txt) => { $('status').textContent = '#' + c.id + ': ' + txt.slice(-90).replace(/\s+/g, ' '); });
           x.pass = check(c, x.final); r.tools.push(x);
-        } catch (e) { r.tools.push({ pass: false, reply: '', err: e.message, modelMs: 0, code: null }); }
+        } catch (e) { r.tools.push({ pass: false, reply: '', err: e.message, modelMs: 0, code: null, failed: true }); }
         if (doPlain) {
           try { const x = await plain(c.q); x.pass = check(c, x.reply); r.plain.push(x); }
           catch (e) { r.plain.push({ pass: false, reply: 'error: ' + e.message }); }
@@ -172,7 +197,7 @@ async function runCases(list) {
   } catch (e) {
     $('status').textContent = 'Error: ' + e.message;
   } finally {
-    $('run-all').disabled = $('run-one').disabled = false; $('stop').disabled = true;
+    $('run-all').disabled = $('run-one').disabled = $('resume').disabled = false; $('stop').disabled = true;
   }
 }
 
@@ -212,6 +237,7 @@ for (const c of CASES) {
   renderRow(c);
 }
 $('run-all').onclick = () => runCases(CASES);
+$('resume').onclick = () => runCases(CASES, true);
 $('run-one').onclick = () => runCases(CASES.filter((c) => c.id === Number($('pick').value)));
 $('stop').onclick = () => { stop = true; };
 $('copy').onclick = async (e) => { try { await navigator.clipboard.writeText(report()); e.target.textContent = 'Copied'; setTimeout(() => (e.target.textContent = 'Copy results'), 1500); } catch { $('report').hidden = false; $('report').value = report(); } };
