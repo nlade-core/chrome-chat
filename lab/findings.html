@@ -46,8 +46,8 @@
   <p class="meta">September 2026 · part of <a href="../">chrome-chat</a>, an open-source chat app for Chrome's on-device model (Gemini Nano) · <a href="compute.html">try the lab yourself</a></p>
 
   <div class="big">
-    <div class="stat"><b>61% → 87%</b><span>right on 84 unseen questions, without vs with Python</span></div>
-    <div class="stat"><b>0 of 15</b><span>plain questions wrongly sent to Python</span></div>
+    <div class="stat"><b>61% → 87%</b><span>right, without vs with Python: 84 answers to 28 questions it had never seen</span></div>
+    <div class="stat"><b>0 of 15</b><span>times a plain question (capitals, translations…) was wrongly sent to Python</span></div>
     <div class="stat"><b>0</b><span>network requests after Python loads — nothing leaves the machine</span></div>
   </div>
 
@@ -88,7 +88,7 @@
   <h2>Results on questions it had never seen</h2>
   <p>The pipeline was tuned on 29 questions, which flatters it. So two further sets were written and committed <em>before</em> the changes they test, then run once each on the real model, with nothing changed afterwards:</p>
   <div class="table-wrap"><table>
-    <tr><th>Unseen set</th><th>With Python</th><th>Plainly</th><th>Plain questions wrongly sent to Python</th></tr>
+    <tr><th>Unseen set</th><th>With Python</th><th>Plainly</th><th>Plain questions wrongly sent to Python (runs)</th></tr>
     <tr><td>Held-out 1 (18 questions × 3 runs)</td><td class="n ok">37 / 45 (82%)</td><td class="n">24 / 45 (53%)</td><td class="n">0 / 9</td></tr>
     <tr><td>Held-out 2 (15 questions × 3 runs)</td><td class="n ok">36 / 39 (92%)</td><td class="n">27 / 39 (69%)</td><td class="n">0 / 6</td></tr>
     <tr><td><strong>Both</strong></td><td class="n ok"><strong>73 / 84 (87%)</strong></td><td class="n"><strong>51 / 84 (61%)</strong></td><td class="n"><strong>0 / 15</strong></td></tr>
@@ -116,7 +116,7 @@
     <li>Every question and its right answer were written and committed <em>before</em> the code that answers them. The two unseen sets were run once each on the real model and never tuned on.</li>
     <li>Every answer was scored by plain code against the known answer — the model never marked its own work. Failures and their code are kept, not just totals.</li>
     <li>A smaller open model on a laptop stood in for fast iteration; every headline number here is from the real on-device model in Chrome 154.</li>
-    <li>Small sets: 84 unseen question-runs. Treat the percentages as a clear direction, not a precise rate.</li>
+    <li>Small sets: 28 unseen questions, each run 3 times (84 answers). Treat the percentages as a clear direction, not a precise rate.</li>
   </ul>
 
   <h2>Why it matters</h2>
