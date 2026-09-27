@@ -99,6 +99,9 @@ export function inferType(q) {
   if (/\bwhat time\b/i.test(q)) return 'time';
   if (/\bhow many\b|\bnumber of\b/i.test(q)) return 'int';
   if (/£|\bin pounds\b|\bprice\b/i.test(q)) return 'decimal:2';
+  // Added after the first typed Nano run (declared "number" for a sort, "date" for a leap-year question):
+  if (/\b(sort|order|arrange)\b/i.test(q)) return 'list';
+  if (/^\s*(is|are|was|were|does|do|did|can|could|has|have|will)\b/i.test(q)) return 'yesno';
   return null;
 }
 export const declaredType = (code) => ((/ANSWER_TYPE\s*=\s*["']([^"']+)["']/.exec(code || '') || [])[1] || '').trim().toLowerCase() || null;
@@ -108,7 +111,9 @@ export function missingInputs(q, code) {
   const miss = [];
   for (const m of q.matchAll(/"([^"]+)"/g)) if (!code.includes(m[1])) miss.push('"' + m[1] + '"');
   const nums = new Set(q.replace(/\d+ decimal places?/gi, '').match(/\d+(?:\.\d+)?/g) || []);
-  for (const n of nums) if (!new RegExp('(?<!\\d)' + n.replace('.', '\\.') + '(?!\\d)').test(code)) miss.push(n);
+  // By value too: "2027-03-01" uses the question's "1" (a Nano run was rejected for that).
+  const inCode = new Set((code.match(/\d+(?:\.\d+)?/g) || []).map(Number));
+  for (const n of nums) if (!new RegExp('(?<!\\d)' + n.replace('.', '\\.') + '(?!\\d)').test(code) && !inCode.has(Number(n))) miss.push(n);
   return miss;
 }
 
@@ -124,9 +129,13 @@ export const NUDGE_TYPED = 'Please answer that with a ```python code block that 
 export const pyWrapper = (type) => String.raw`
 import datetime as _dt, re as _re
 _T = ${JSON.stringify(type)}
-if _T == "model":
-    _T = str(globals().get("ANSWER_TYPE", "text")).strip().lower()
 _r = answer()
+if _T == "auto":
+    # No type inferred from the question: format by what the value is (the
+    # model's own ANSWER_TYPE is only a hint -- enforcing it pushed a sort into
+    # returning numbers[0] on Nano).
+    _T = ("yesno" if isinstance(_r, bool) else "int" if isinstance(_r, int) else "number" if isinstance(_r, float)
+          else "date" if isinstance(_r, (_dt.date, _dt.datetime)) else "list" if isinstance(_r, (list, tuple)) else "text")
 def _bad(msg):
     raise TypeError("ANSWER CHECK: answer() returned " + repr(_r)[:60] + " (" + type(_r).__name__ + "); " + msg)
 def _num():
@@ -170,6 +179,16 @@ elif _T == "time":
     if not _m or int(_m.group(1)) > 23 or int(_m.group(2)) > 59:
         _bad("this question needs a time as HH:MM")
     _out = "%02d:%s" % (int(_m.group(1)), _m.group(2))
+elif _T == "yesno":
+    if isinstance(_r, str) and _r.strip().lower().rstrip(".") in ("yes", "no", "true", "false"):
+        _r = _r.strip().lower().rstrip(".") in ("yes", "true")
+    if not isinstance(_r, bool):
+        _bad("this question needs yes or no (return True or False)")
+    _out = "yes" if _r else "no"
+elif _T == "list":
+    if not isinstance(_r, (list, tuple)):
+        _bad("this question needs a list")
+    _out = ", ".join(str(x) for x in _r)
 else:
     if isinstance(_r, bool):
         _out = "yes" if _r else "no"
@@ -184,6 +203,9 @@ print("__ANSWER__=" + _out)
 // io: { first(system, q) -> reply, again(text) -> reply (same conversation), py(code) -> { ok, out, err } }
 export async function typedAnswer(q, io) {
   const r = { typed: true, inferred: inferType(q), problems: [], repaired: false };
+  // Plain code decides whether tools are offered at all (added after Nano, told
+  // "ANY question involving numbers", wrote code for 11 of 18 plain questions).
+  if (!looksComputable(q)) { r.gated = true; r.reply = await io.first(PROMPT_PLAIN, q); r.code = null; r.final = r.reply; return r; }
   r.reply = await io.first(PROMPT_TYPED, q);
   r.code = extractPython(r.reply);
   if (!r.code && looksComputable(q)) {
@@ -195,12 +217,12 @@ export async function typedAnswer(q, io) {
   if (!r.code) { r.final = r.reply; return r; }
   for (let attempt = 0; attempt < 2; attempt++) {
     r.declared = declaredType(r.code);
-    r.type = r.inferred || r.declared || 'text';
+    r.type = r.inferred || 'auto';
     r.typeMismatch = !!(r.inferred && r.declared && r.inferred !== r.declared);
     const missing = missingInputs(q, r.code);
     let problem = null;
     if (!/def\s+answer\s*\(/.test(r.code)) problem = 'define def answer(): that returns the final value';
-    else if (missing.length) problem = 'compute from the question\'s own values -- your code does not use ' + missing.join(', ');
+    else if (missing.length) problem = 'your code does not use ' + missing.join(', ') + ' from the question -- include ' + (missing.length > 1 ? 'them' : 'it') + ' in the code and compute the answer from ' + (missing.length > 1 ? 'them' : 'it') + '; do not write the answer yourself';
     else {
       const run = await io.py(r.code + '\n' + pyWrapper(r.type));
       const m = run.ok && /__ANSWER__=(.*)$/m.exec(run.out);
