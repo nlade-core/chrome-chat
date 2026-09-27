@@ -121,7 +121,8 @@ export const PROMPT_PLAIN = 'You are a helpful, concise assistant.';
 // and, if the reply came back without code, asks once more for the code.
 // (Month/weekday names and bare quotes were tried first and nudged the
 // near-misses "Translate "good morning"" and "...moved to thursday" into code.)
-export const looksComputable = (q) => /\d/.test(q) || (/"[^"]+"/.test(q) && /\b(letters?|how many|count|spell|backwards)\b/i.test(q)); // spell/backwards added with case 28
+export const looksComputable = (q) => /\d/.test(q) || (/"[^"]+"/.test(q) && /\b(letters?|how many|count|spell|backwards)\b/i.test(q)) // spell/backwards added with case 28
+  || /\b(sort|order|arrange|alphabetical(ly)?)\b/i.test(q); // added after held-out 46 ("Sort these words alphabetically") never got the tool
 export const NUDGE = 'Please answer that with a ```python code block that prints only the final answer, as instructed.';
 export const extractPython = (reply) => (/```(?:python|py)?[ \t]*\n([\s\S]*?)```/i.exec(reply || '') || [])[1] || null;
 
@@ -137,7 +138,8 @@ export function check(c, out) {
     if (typeof c.num === 'bigint') return nums.some((n) => /^\d+$/.test(n) && BigInt(n) === c.num);
     return nums.some((n) => Math.abs(Number(n) - c.num) < 1e-6);
   }
-  if (c.compact) return s.replace(/[\s\[\]()]/g, '').includes(c.compact);
+  // Numbered or bulleted lists count as lists ("1. apple\n2. mango" -- held-out 46 was marked wrong for that).
+  if (c.compact) return s.split('\n').map((l) => l.replace(/^\s*(\d+[.)]|[-*•])\s+/, '')).join(',').replace(/[\s\[\]()]/g, '').replace(/,+/g, ',').includes(c.compact);
   return c.text.some((t) => s.includes(t)) && !(c.not || []).some((t) => s.includes(t));
 }
 
@@ -167,10 +169,22 @@ export const declaredType = (code) => ((/ANSWER_TYPE\s*=\s*["']([^"']+)["']/.exe
 export function missingInputs(q, code) {
   const miss = [];
   for (const m of q.matchAll(/"([^"]+)"/g)) if (!code.includes(m[1])) miss.push('"' + m[1] + '"');
+  // Thousands commas joined first: "1,000,000" is one number, not 1, 000, 000 (probe 67/72 were rejected for that).
+  q = q.replace(/(\d),(?=\d{3}\b)/g, '$1');
   const nums = new Set(q.replace(/\d+ decimal places?/gi, '').match(/\d+(?:\.\d+)?/g) || []);
   // By value too: "2027-03-01" uses the question's "1" (a Nano run was rejected for that).
-  const inCode = new Set((code.match(/\d+(?:\.\d+)?/g) || []).map(Number));
-  for (const n of nums) if (!new RegExp('(?<!\\d)' + n.replace('.', '\\.') + '(?!\\d)').test(code) && !inCode.has(Number(n))) miss.push(n);
+  const inCode = [...new Set((code.match(/\d+(?:\.\d+)?/g) || []).map(Number))];
+  const has = (v) => inCode.some((x) => Math.abs(x - v) < 1e-9);
+  // Added after held-out 33/38: a percentage may appear as a fraction (12.5% -> 0.125,
+  // 15% off -> 0.85), and a clock time as "19:40" or 1940.
+  const pct = new Set([...q.matchAll(/(\d+(?:\.\d+)?)\s*%/g)].map((m) => m[1]));
+  const used = new Set();
+  for (const [, hh, mm] of q.matchAll(/\b(\d{1,2}):(\d{2})\b/g)) if (code.includes(hh + ':' + mm) || has(Number(hh + mm))) used.add(hh).add(mm);
+  for (const n of nums) {
+    if (used.has(n) || new RegExp('(?<!\\d)' + n.replace('.', '\\.') + '(?!\\d)').test(code) || has(Number(n))) continue;
+    if (pct.has(n) && [n / 100, 1 - n / 100, 1 + n / 100, 100 - n, 100 + n].some(has)) continue;
+    miss.push(n);
+  }
   return miss;
 }
 
@@ -232,6 +246,8 @@ elif _T == "weekday":
 elif _T == "time":
     if isinstance(_r, (_dt.datetime, _dt.time)):
         _r = _r.strftime("%H:%M")
+    elif isinstance(_r, int) and not isinstance(_r, bool) and 0 <= _r <= 2359 and _r % 100 < 60:
+        _r = "%02d:%02d" % (_r // 100, _r % 100)  # 2215 -> 22:15 (a held-out Nano answer)
     _m = _re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", _r) if isinstance(_r, str) else None
     if not _m or int(_m.group(1)) > 23 or int(_m.group(2)) > 59:
         _bad("this question needs a time as HH:MM")
@@ -304,7 +320,8 @@ export async function typedAnswer(q, io) {
     r.problems.push(problem);
     if (attempt === TRIES - 1) break;
     r.repaired = true;
-    const fix = await io.again('Your code was rejected: ' + problem + '. Reply with only a corrected ```python code block (ANSWER_TYPE and def answer()).');
+    const hint = r.type === 'time' ? ' For clock times use datetime: (datetime.datetime(2000, 1, 1, H, M) + datetime.timedelta(hours=..., minutes=...)).strftime("%H:%M").' : '';
+    const fix = await io.again('Your code was rejected: ' + problem + '.' + hint + ' Reply with only a corrected ```python code block (ANSWER_TYPE and def answer()).');
     const c2 = extractPython(fix);
     if (!c2) break;
     r.code2 = r.code = c2;

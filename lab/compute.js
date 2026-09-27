@@ -252,7 +252,7 @@ for (const c of CASES) {
   const o = h('option', '#' + c.id + ' ' + c.q); o.value = c.id; $('pick').append(o);
   renderRow(c);
 }
-const inSet = () => CASES.filter((c) => $('set').value === 'all' || ($('set').value === 'held') === !!c.held);
+const inSet = () => CASES.filter((c) => $('set').value === 'all' || $('set').value === c.set);
 $('run-all').onclick = () => runCases(inSet());
 $('resume').onclick = () => runCases(inSet(), true);
 $('run-one').onclick = () => runCases(CASES.filter((c) => c.id === Number($('pick').value)));

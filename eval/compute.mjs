@@ -1,4 +1,4 @@
-// Usage: node eval/compute.mjs [--model gemma4:e4b] [--runs 3] [--no-plain] [--strict] [--nudge] [--typed] [--set tune|held|all]
+// Usage: node eval/compute.mjs [--model gemma4:e4b] [--runs 3] [--no-plain] [--strict] [--nudge] [--typed] [--set tune|held|held2|probe|all]
 //
 // The compute lab (lab/compute.html) with local stand-ins: Ollama for Gemini
 // Nano (temperature 1, topK 3, hidden reasoning off) and local python3 for
@@ -17,7 +17,7 @@ const TOOLS = process.argv.includes('--strict') ? PROMPT_TOOLS_STRICT : PROMPT_T
 const doNudge = process.argv.includes('--nudge');
 const typed = process.argv.includes('--typed');
 const set = arg('set', 'tune'); // tune | held | all
-const SET = CASES.filter((c) => set === 'all' || (set === 'held') === !!c.held);
+const SET = CASES.filter((c) => set === 'all' || set === c.set);
 
 function runPython(code) {
   try { return { ok: true, out: execFileSync('python3', ['-I', '-c', code], { timeout: 10000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim() }; }
