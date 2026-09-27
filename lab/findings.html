@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Small model, real maths</title>
+<meta name="description" content="Chrome's built-in on-device model gets everyday maths and dates wrong about half the time. Letting it write Python that the page checks and runs took it to 82-92% on unseen questions.">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  * { margin: 0; padding: 0; }
+  :root { --bg: #fff; --fg: #16161a; --muted: #62626e; --border: #e4e4e7; --accent: #0a58ca; --ok: #1a7f37; --bad: #cf222e; --code: #f6f8fa; --hi: #eef4ff; color-scheme: light; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #18181b; --fg: #ececf1; --muted: #a1a1aa; --border: #34343a; --accent: #6ea8fe; --ok: #3fb950; --bad: #ff7b72; --code: #232327; --hi: #1c2433; color-scheme: dark; } }
+  :root[data-theme="dark"] { --bg: #18181b; --fg: #ececf1; --muted: #a1a1aa; --border: #34343a; --accent: #6ea8fe; --ok: #3fb950; --bad: #ff7b72; --code: #232327; --hi: #1c2433; color-scheme: dark; }
+  body { background: var(--bg); color: var(--fg); font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 1.9rem; line-height: 1.2; letter-spacing: -0.01em; }
+  h2 { font-size: 1.2rem; margin: 40px 0 10px; }
+  p { margin: 10px 0; } a { color: var(--accent); }
+  .lede { font-size: 1.1rem; color: var(--muted); margin-top: 12px; }
+  .meta { font-size: 0.85rem; color: var(--muted); margin-top: 8px; }
+  .big { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 22px 0 6px; }
+  .stat { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; background: var(--hi); }
+  .stat b { display: block; font-size: 1.9rem; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 0.88rem; color: var(--muted); }
+  .table-wrap { overflow-x: auto; margin: 12px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  td.n { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ok { color: var(--ok); font-weight: 600; } .bad { color: var(--bad); font-weight: 600; }
+  code { font: 0.88em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; }
+  pre { font: 0.85rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; margin: 10px 0; }
+  ol, ul { padding-left: 1.3rem; } li { margin: 6px 0; }
+  .flow { counter-reset: s; list-style: none; padding: 0; }
+  .flow li { counter-increment: s; position: relative; padding: 10px 12px 10px 48px; border: 1px solid var(--border); border-radius: 10px; margin: 8px 0; }
+  .flow li::before { content: counter(s); position: absolute; left: 12px; top: 9px; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--bg); font-weight: 700; font-size: 0.85rem; display: grid; place-items: center; }
+  .tag { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); margin-left: 6px; white-space: nowrap; }
+  .note { border-left: 3px solid var(--accent); background: var(--hi); padding: 10px 14px; border-radius: 6px; margin: 16px 0; }
+  footer { margin-top: 48px; font-size: 0.85rem; color: var(--muted); border-top: 1px solid var(--border); padding-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Small model, real maths</h1>
+  <p class="lede">Chrome's built-in AI model runs entirely on your own machine. On everyday maths and dates it is wrong about half the time. Letting it write a little Python — which the page checks and runs in a locked sandbox — took it to 82–92% on questions it had never seen.</p>
+  <p class="meta">September 2026 · part of <a href="../">chrome-chat</a>, an open-source chat app for Chrome's on-device model (Gemini Nano) · <a href="compute.html">try the lab yourself</a></p>
+
+  <div class="big">
+    <div class="stat"><b>61% → 87%</b><span>right on 84 unseen questions, without vs with Python</span></div>
+    <div class="stat"><b>0 of 15</b><span>plain questions wrongly sent to Python</span></div>
+    <div class="stat"><b>0</b><span>network requests after Python loads — nothing leaves the machine</span></div>
+  </div>
+
+  <h2>The problem: confident, plausible, wrong</h2>
+  <p>A model small enough to run in a browser is good with language and bad with arithmetic, letters and calendars. It doesn't see letters, only chunks of words, and it doesn't calculate, it predicts. Asked plainly, three times each, Nano said:</p>
+  <div class="table-wrap"><table>
+    <tr><th>Question</th><th>Nano, plainly</th><th>Right answer</th></tr>
+    <tr><td>What is 17% of 240?</td><td class="bad">31.2 (3 of 3 times)</td><td>40.8</td></tr>
+    <tr><td>What is 356 × 47?</td><td class="bad">16,772 (3 of 3)</td><td>16,732</td></tr>
+    <tr><td>What is −15 plus 8 times 3?</td><td class="bad">−9 (3 of 3)</td><td>9</td></tr>
+    <tr><td>Is 2032 a leap year?</td><td class="bad">No. (3 of 3)</td><td>Yes</td></tr>
+    <tr><td>What day is 100 days after Sunday 27 September 2026?</td><td class="bad">Wednesday</td><td>Tuesday</td></tr>
+    <tr><td>How many days until Christmas Day this year?</td><td class="bad">"23 days until Christmas Day 2024!"</td><td>It was 2026</td></tr>
+  </table></div>
+  <p>None of these is hard. All of them are the kind of thing a real assistant gets asked, and every wrong answer sounded exactly as sure as the right ones.</p>
+
+  <h2>The fix: let it write code, then check the code</h2>
+  <p>The page gives the model one job it's good at — reading the question and writing a few lines of Python — and does everything else in plain code:</p>
+  <ol class="flow">
+    <li><strong>Decide whether to offer Python at all.</strong><span class="tag">code</span><br>Only questions with a number, a quoted word to count, or "sort/order" in them. Everything else is answered normally. This single rule took wrongly-triggered code from 11 in 18 plain questions to zero.</li>
+    <li><strong>Ask for code, not an answer.</strong><span class="tag">prompt</span><br>About 90 words: you can't see letters and you make arithmetic and date mistakes, so write a Python function <code>answer()</code> that computes the result.</li>
+    <li><strong>Check the code uses the question's own values.</strong><span class="tag">code</span><br>If the question says 918 × 64, the code must contain 918 and 64. This turned out to be the most important check of all — see below.</li>
+    <li><strong>Run it in a locked sandbox.</strong><span class="tag">code</span><br>Python (Pyodide) runs in a background worker with its network functions removed, a 10-second limit, and no access to the page or the chat.</li>
+    <li><strong>Check the answer's type, and format it.</strong><span class="tag">code</span><br>"How many" must be a whole number (not <code>True</code>); "what date" must be a date; "to 5 decimal places" gets rounded to 5. A fixed wrapper does this — never the model's code.</li>
+    <li><strong>On a failure, say why and retry (twice at most).</strong><span class="tag">prompt, sent by code</span><br>"Your code does not use 918, 64 from the question — compute the answer from them; do not write the answer yourself."</li>
+  </ol>
+  <div class="note">The prompt can only ask. The model often ignores it. The plain code around it is what makes the answers right.</div>
+
+  <h2>The check that mattered most</h2>
+  <p>Asked to write code, Nano's first move was usually to <em>hard-code its guess</em> — code that just returns the wrong number it would have said anyway:</p>
+<pre>def answer():
+    return 14200761      # its guess for 4817 × 2953</pre>
+  <p>Three runs, three different wrong guesses (14,200,761 · 14,226,001 · 14,201,061). Because none of them contains 4817 and 2953, each was rejected with the reason, and the retry came back as:</p>
+<pre>def answer():
+    return 4817 * 2953   # 14,224,601 — right, every time</pre>
+  <p>The same happened for powers, percentages, averages and letter counts. Rejecting code that doesn't use the question's values is what turns a model that <em>guesses</em> into one that <em>computes</em>.</p>
+
+  <h2>Results on questions it had never seen</h2>
+  <p>The pipeline was tuned on 29 questions, which flatters it. So two further sets were written and committed <em>before</em> the changes they test, then run once each on the real model, with nothing changed afterwards:</p>
+  <div class="table-wrap"><table>
+    <tr><th>Unseen set</th><th>With Python</th><th>Plainly</th><th>Plain questions wrongly sent to Python</th></tr>
+    <tr><td>Held-out 1 (18 questions × 3 runs)</td><td class="n ok">37 / 45 (82%)</td><td class="n">24 / 45 (53%)</td><td class="n">0 / 9</td></tr>
+    <tr><td>Held-out 2 (15 questions × 3 runs)</td><td class="n ok">36 / 39 (92%)</td><td class="n">27 / 39 (69%)</td><td class="n">0 / 6</td></tr>
+    <tr><td><strong>Both</strong></td><td class="n ok"><strong>73 / 84 (87%)</strong></td><td class="n"><strong>51 / 84 (61%)</strong></td><td class="n"><strong>0 / 15</strong></td></tr>
+  </table></div>
+  <p>The gains are biggest exactly where the plain model is confidently wrong: dates (from almost never right to almost always), long multiplication, percentages and operator precedence. On things it already gets right — capitals, translations, a polite email — it's left alone.</p>
+
+  <h2>What didn't work</h2>
+  <ul>
+    <li><strong>Letting the model decide when to use Python.</strong> It mostly didn't: on a test model it wrote code for 16 of 54 questions that needed it — and answered "how many r's in strawberry" in its head, wrongly, every time.</li>
+    <li><strong>Telling it to use code for "any question involving numbers".</strong> It then wrote code for 11 of 18 plain questions too, including one that returned the boiling point of water as 32.</li>
+    <li><strong>Trusting the model's own label for the answer type.</strong> It labelled a sorted list as a number, the check demanded a number, and it obediently returned just the first item. Only types plain code can infer from the question are now enforced.</li>
+    <li><strong>More thinking time.</strong> A hidden "reasoning" mode on the test model didn't fix date mistakes and doubled the time. Changing the tool did: Python's date library 24/25 vs JavaScript's 15/25.</li>
+  </ul>
+
+  <h2>What's still wrong</h2>
+  <ul>
+    <li><strong>Code that runs but is wrong.</strong> "4 hours 50 after 11:20" came back as 15:10 — the code forgot to carry the hour. No check catches right-looking code with a logic slip. Showing the code next to the answer at least makes it checkable.</li>
+    <li><strong>No clock.</strong> Without today's date it believes it is 2024. The fix is to tell it the date — but that answers "what day is it", not "what has happened since it was trained".</li>
+    <li><strong>Silent assumptions.</strong> "3/4/2027" was read as 4 March (the US way) every time, never flagged.</li>
+    <li><strong>Exact fractions and rounding asked for in words</strong> ("as a fraction", "to the nearest whole number") still slip.</li>
+  </ul>
+
+  <h2>How it was tested</h2>
+  <ul>
+    <li>Every question and its right answer were written and committed <em>before</em> the code that answers them. The two unseen sets were run once each on the real model and never tuned on.</li>
+    <li>Every answer was scored by plain code against the known answer — the model never marked its own work. Failures and their code are kept, not just totals.</li>
+    <li>A smaller open model on a laptop stood in for fast iteration; every headline number here is from the real on-device model in Chrome 154.</li>
+    <li>Small sets: 84 unseen question-runs. Treat the percentages as a clear direction, not a precise rate.</li>
+  </ul>
+
+  <h2>Why it matters</h2>
+  <p>On-device AI keeps data on the machine, costs nothing per question and works offline — but only if it can be trusted. The lesson here generalises: <strong>don't ask a small model to be right; give it a tool, make it use the tool, check the result in plain code, and show the working.</strong> The same pattern — source or tool, plain-code checks, visible evidence — is what makes it usable for real documents and real decisions.</p>
+
+  <footer>
+    Open source: <a href="https://github.com/nlade-core/chrome-chat">github.com/nlade-core/chrome-chat</a> (the lab is in <code>lab/</code>; full method, every run and every change are in the README). Try the questions yourself in desktop Chrome with built-in AI: <a href="compute.html">the compute lab</a>.
+  </footer>
+</main>
+</body>
+</html>

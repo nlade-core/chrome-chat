@@ -28,7 +28,7 @@
 </head>
 <body>
   <h1>Compute lab: reasoning + Python on the on-device model</h1>
-  <p class="muted">The model reasons and writes a little Python for anything it would otherwise get wrong in its head (letters, sums, dates); Python (Pyodide) runs it in this page, in a worker with its network access removed. Plain code scores the answers. Python loads once from cdn.jsdelivr.net (~12 MB); after that the page's request counter below should stay at 0. (It can't see inside the Python worker; there the network functions are removed after loading, and a test that tries <code>fetch</code> and Pyodide's URL loader from Python gets errors.) Lab page for manual checks — part of <a href="../">chrome-chat</a>.</p>
+  <p class="muted">The model reasons and writes a little Python for anything it would otherwise get wrong in its head (letters, sums, dates); Python (Pyodide) runs it in this page, in a worker with its network access removed. Plain code scores the answers. Python loads once from cdn.jsdelivr.net (~12 MB); after that the page's request counter below should stay at 0. (It can't see inside the Python worker; there the network functions are removed after loading, and a test that tries <code>fetch</code> and Pyodide's URL loader from Python gets errors.) Lab page for manual checks — part of <a href="../">chrome-chat</a>. <strong><a href="findings.html">Read the findings</a></strong>.</p>
   <p><span id="model">Checking the model…</span> · <span id="py">Python not loaded</span> · <span id="net"></span></p>
 
   <h2>Run the test set</h2>
