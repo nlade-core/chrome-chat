@@ -102,8 +102,28 @@ export const CASES = [
   { id: 71, probe: true, code: true, q: 'If today is 3/4/2027, what date will it be in 10 days?', text: ['2027-04-13', '2027-03-14', '13 april 2027', '14 march 2027', 'april 13, 2027', 'march 14, 2027'] },
   { id: 72, probe: true, code: true, q: 'What is 1,000,000 divided by 3, rounded to the nearest whole number?', num: 333333 },
   { id: 73, probe: true, code: true, q: 'A recipe for 4 people uses 300 g of flour. How much flour is needed for 6 people, in grams?', num: 450 },
+  // WORDS (2026-09-28, discovery -- committed before any run, no tuning): longer
+  // problems mixing words and numbers. Expected trouble, written down first:
+  // irrelevant numbers (75, 85 -- the values check demands every number be used),
+  // numbers as words (76, 86 -- no digit, so the gate never offers Python),
+  // two-part answers (81, 84 -- `all`: every part must appear), a classic trap (83),
+  // chained percentages (79), VAT inside prices (82), and half-up money rounding
+  // (77: the true 32.045 is £32.05; Python's float formatting gives 32.04 -- both accepted).
+  { id: 74, words: true, code: true, q: 'A café sells coffee at £2.80 and cake at £3.50. How much do 3 coffees and 2 cakes cost, in pounds?', num: 15.4 },
+  { id: 75, words: true, code: true, q: 'Sam is 34 and has 3 children. He buys 4 packs of 12 eggs and uses 17 of them. How many eggs are left?', num: 31 },
+  { id: 76, words: true, code: true, q: 'Twelve friends share a bill of one hundred and eighty pounds equally. How much does each pay, in pounds?', num: 15 },
+  { id: 77, words: true, code: true, q: 'A car uses 6.5 litres of fuel per 100 km and fuel costs £1.45 a litre. What does a 340 km trip cost in fuel, in pounds?', text: ['32.05', '32.04'] },
+  { id: 78, words: true, code: true, q: 'A contractor charges £45 an hour and works from 09:15 to 16:45 with a 30-minute unpaid lunch. What is the pay for the day, in pounds?', num: 315 },
+  { id: 79, words: true, code: true, q: 'A £200 jacket is discounted by 20%, then a further 10% is taken off the sale price. What is the final price, in pounds?', num: 144 },
+  { id: 80, words: true, code: true, q: 'One tap fills a 120-litre tank in 8 minutes and another fills it in 12 minutes. How many minutes do they take together?', num: 4.8 },
+  { id: 81, words: true, code: true, q: 'An invoice dated 14 November 2026 is due 30 days later. On what date, and what day of the week, is it due?', all: [['2026-12-14', '14 december 2026', 'december 14, 2026'], ['monday']] },
+  { id: 82, words: true, code: true, q: 'My expenses this month: rent £950, electricity £84.20, broadband £32, phone £18.50, council tax £156. Rent and council tax have no VAT; the other three prices include 20% VAT. How much VAT did I pay in total, in pounds?', num: 22.45 },
+  { id: 83, words: true, code: true, q: 'If 5 machines make 5 widgets in 5 minutes, how many minutes would 100 machines take to make 100 widgets?', num: 5 },
+  { id: 84, words: true, code: true, q: 'Split £100 between Anna and Ben in the ratio 3:2. How much does each get?', all: [['60'], ['40']] },
+  { id: 85, words: true, code: true, q: 'A school trip uses 3 coaches, each carrying 52 pupils, plus 11 teachers. Tickets cost £7.50 per pupil and teachers go free. The trip leaves at 8:30. What is the total ticket cost, in pounds?', num: 1170 },
+  { id: 86, words: true, code: true, q: 'My train leaves at half past nine in the morning and the journey takes forty minutes. What time do I arrive?', text: ['10:10'] },
 ];
-for (const c of CASES) c.set = c.probe ? 'probe' : c.held === 2 ? 'held2' : c.held ? 'held' : 'tune';
+for (const c of CASES) c.set = c.words ? 'words' : c.probe ? 'probe' : c.held === 2 ? 'held2' : c.held ? 'held' : 'tune';
 
 export const PROMPT_TOOLS = 'You are a helpful, concise assistant. You cannot see the individual letters of words, and you make arithmetic and date mistakes. '
   + 'So if a question needs counting, arithmetic or a date or time calculation, never work it out in your head: think briefly about what to compute, '
@@ -139,6 +159,7 @@ export function check(c, out) {
     return nums.some((n) => Math.abs(Number(n) - c.num) < 1e-6);
   }
   // Numbered or bulleted lists count as lists ("1. apple\n2. mango" -- held-out 46 was marked wrong for that).
+  if (c.all) return c.all.every((alts) => alts.some((t) => s.includes(t))); // multi-part answers: every part must appear
   if (c.compact) return s.split('\n').map((l) => l.replace(/^\s*(\d+[.)]|[-*•])\s+/, '')).join(',').replace(/[\s\[\]()]/g, '').replace(/,+/g, ',').includes(c.compact);
   return c.text.some((t) => s.includes(t)) && !(c.not || []).some((t) => s.includes(t));
 }

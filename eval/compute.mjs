@@ -1,4 +1,4 @@
-// Usage: node eval/compute.mjs [--model gemma4:e4b] [--runs 3] [--no-plain] [--strict] [--nudge] [--typed] [--set tune|held|held2|probe|all]
+// Usage: node eval/compute.mjs [--model gemma4:e4b] [--runs 3] [--no-plain] [--strict] [--nudge] [--typed] [--set tune|held|held2|probe|words|all]
 //
 // The compute lab (lab/compute.html) with local stand-ins: Ollama for Gemini
 // Nano (temperature 1, topK 3, hidden reasoning off) and local python3 for
