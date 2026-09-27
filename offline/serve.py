@@ -76,7 +76,23 @@ def main():
         def __init__(self, *a, **kw):
             super().__init__(*a, directory=REPO, **kw)
 
+        def refuse(self):
+            # Only this machine's own names: a page on another site that
+            # re-points its domain at 127.0.0.1 (DNS rebinding) arrives with
+            # its own Host header and is turned away. Hidden files (.git,
+            # .env, ...) are never served.
+            host = (self.headers.get('Host') or '').rsplit(':', 1)[0].strip('[]').lower()
+            if host not in ('localhost', '127.0.0.1', '::1'):
+                self.send_error(403, 'Forbidden host')
+                return True
+            if any(seg.startswith('.') for seg in self.path.split('?', 1)[0].split('/') if seg):
+                self.send_error(404)
+                return True
+            return False
+
         def do_GET(self):
+            if self.refuse():
+                return
             if self.path == '/kiwix/book':
                 # Which ZIM is loaded -- the page needs its name for search URLs.
                 body = book.encode()
@@ -91,6 +107,8 @@ def main():
             super().do_GET()
 
         def do_HEAD(self):
+            if self.refuse():
+                return
             # The page checks whether an exact article path exists with HEAD.
             if self.path.startswith('/kiwix/'):
                 return self.proxy('HEAD')
