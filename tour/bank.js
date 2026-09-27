@@ -38,8 +38,11 @@ export const BANK = [
 // source doesn't say". (Whole article checked 2026-09-27: no visitor figures.)
 export const TRAP = { keyword: 'scott', q: 'How many people visited the Scott Monument in 2024?', source: W('Scott Monument') };
 
-// Which bank questions the tour uses (set after calibration; see README).
-export const TOUR_IDS = null;
+// The tour's chapter-1 questions, chosen after calibration (README): every one
+// resolves to its article and is right with it attached; 13 and 15 the stand-in
+// usually gets right cold, 3, 10 and 2 it usually bluffs -- so a confident
+// answer alone doesn't say which is which.
+export const TOUR_IDS = [13, 3, 15, 10, 2];
 
 // ------------------------------------------------------------ plain-code checks
 

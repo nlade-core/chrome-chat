@@ -336,8 +336,8 @@
       <div id="thread-list"></div>
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
-        <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-27 13:04 UTC</div>
+        <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · <a href="?tour" id="tour-link">Take the tour</a> · Chrome desktop only</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-27 18:26 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -1563,6 +1563,7 @@
       contextMeterFillEl.style.width = pct + '%';
       contextMeterFillEl.className = ratio > 0.85 ? 'bad' : ratio > 0.6 ? 'warn' : '';
       contextMeterPctEl.textContent = pct + '%';
+      document.dispatchEvent(new CustomEvent('chat:context', { detail: { usage: conv.session.contextUsage, window: conv.session.contextWindow } }));
     }
     // Builds a fresh session's initialPrompts, aware of any condensation
     // divider in the message history: everything up to and including the
@@ -1957,15 +1958,29 @@
       // stronger signal -- it goes straight after the (missing) exact match,
       // as the counterpart if one is linked, or as-is, labelled, if not.
       const other = hopFrom || otherEdition(lang);
-      const [exact, fulltext, otherExact, hopFull] = await Promise.all([
+      // A capitalised multi-word name in a question ("How many people visited
+      // the Scott Monument in 2024?") is almost always the subject, but
+      // full-text search needs every word to match and returned "Monument",
+      // whose one-word title then won the title-in-query rule below
+      // (confirmed live, 7 of 13 guided-tour questions). So each such name is
+      // also tried as an exact title, in the same round trip; the longest
+      // hit ranks straight after an exact match of the whole query.
+      const names = hopFrom ? [] : [...new Set((query.match(/[A-ZÀ-Ý][\p{L}\p{N}'’-]*(?:\s+(?:(?:of|the|de|la|le|du|des)\s+)?[A-ZÀ-Ý][\p{L}\p{N}'’-]*)+/gu) || []))]
+        .sort((x, y) => y.length - x.length).slice(0, 3);
+      const [exact, fulltext, otherExact, hopFull, ...nameHits] = await Promise.all([
         wikiSearch(lang, query, 1, 'nearmatch'),
         hopFrom ? [] : wikiSearch(lang, query, Math.max(limit, 10)),
         WIKI_LANGS[other] ? wikiSearch(other, query, 1, 'nearmatch', lang, true) : [],
         hopFrom ? wikiSearch(hopFrom, query, Math.max(limit, 10), null, lang) : [],
+        ...names.map((n) => wikiSearch(lang, n, 1, 'nearmatch').catch(() => [])),
       ]);
+      // ...unless search already has a longer title that's also in the query
+      // and contains the name: "Tay Bridge disaster" over "Tay Bridge".
+      const longer = (n) => fulltext.some((c) => !c.disambiguation && c.title.length > n.title.length && titleInQuery(c.title, query) && normTitle(c.title).includes(normTitle(n.title)));
+      const named = nameHits.flat().filter((c) => !c.disambiguation && !longer(c)).slice(0, 1);
       const seen = new Set();
       const key = (c) => c.lang + ':' + c.title;
-      const merged = [...exact, ...otherExact, ...hopFull, ...fulltext].filter((c) => !seen.has(key(c)) && seen.add(key(c)));
+      const merged = [...exact, ...named, ...otherExact, ...hopFull, ...fulltext].filter((c) => !seen.has(key(c)) && seen.add(key(c)));
       // Finding the article at all: nothing real in the target language ->
       // search the other edition too. A hit there that links back is just
       // the target-language article under a different name; one that
@@ -1984,7 +1999,7 @@
       // the subject is in range: "is montmartre worth visiting" had
       // Montmartre outside the top 4.
       const inQuery = (c) => (titleInQuery(c.via || c.title, query) ? 1 : 0);
-      const nExact = exact.length;
+      const nExact = exact.length + (merged[exact.length] && named[0] && key(merged[exact.length]) === key(named[0]) ? 1 : 0);
       const rest = merged.slice(nExact).map((c, i) => ({ c, i, w: inQuery(c) }))
         .sort((x, y) => (y.w - x.w) || (x.i - y.i)).map((x) => x.c);
       merged.splice(nExact, merged.length - nExact, ...rest);
@@ -3335,6 +3350,7 @@
         chatNote.textContent = conv.session ? 'Generating…' : 'Preparing the model…';
       }
 
+      let replyError = null;
       let sessionTiming = null; // only set if THIS call actually created/adopted the session -- not on a continuing turn that reuses an existing one
       try {
         if (!conv.session && claimedPrewarm) {
@@ -3372,8 +3388,12 @@
         await streamReply(threadId, [{ role: 'user', content }], sessionTiming);
       } catch (e) {
         if (isShown()) chatNote.textContent = 'Error: ' + e.message;
+        replyError = e.message;
       }
       if (isShown()) chatSendBtn.disabled = false;
+      // For the guided tour (tour/), which only listens -- see window.chromeChat.
+      const last = conv.messages[conv.messages.length - 1];
+      document.dispatchEvent(new CustomEvent('chat:reply', { detail: { text, threadId, reply: last && last.role === 'assistant' ? last.content : '', label: urlContext ? urlContext.label : null, error: replyError } }));
     }
 
     let sendChatGuardActive = false; // blocks a re-entrant Enter/click while resolving a pending link/slash-command below, so a fast double-Enter can't race in
@@ -3515,6 +3535,18 @@
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
     });
     initOfflineUi();
+
+    // The guided tour (tour/) drives the real app through this and the
+    // chat:reply / chat:context events above -- it never reaches into app
+    // state. Loaded only on request (?tour, or the sidebar link).
+    window.chromeChat = {
+      newChat: startNewChat,
+      fill(text) { chatInput.value = text; autoResize(); chatInput.dispatchEvent(new Event('input')); chatInput.focus(); },
+      ready: () => promptOk,
+    };
+    const openTour = () => import('./tour/tour.js').then((m) => m.startTour(window.chromeChat)).catch((e) => console.warn('[chrome-chat] tour failed to load --', e));
+    document.getElementById('tour-link').addEventListener('click', (e) => { e.preventDefault(); closeSidebarMobile(); openTour(); });
+    if (new URLSearchParams(location.search).has('tour')) openTour();
   </script>
 </body>
 </html>
