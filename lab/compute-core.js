@@ -142,7 +142,7 @@ if _T == "int":
     _out = str(_r)
 elif _T == "number":
     _num()
-    _out = str(_r) if isinstance(_r, int) else repr(round(_r, 10))
+    _out = str(_r) if isinstance(_r, int) else str(int(_r)) if _r.is_integer() else repr(round(_r, 10))
 elif _T.startswith("decimal:"):
     _num()
     _out = format(_r, "." + _T.split(":")[1] + "f")
@@ -205,7 +205,8 @@ export async function typedAnswer(q, io) {
       const run = await io.py(r.code + '\n' + pyWrapper(r.type));
       const m = run.ok && /__ANSWER__=(.*)$/m.exec(run.out);
       if (m) { r.out = r.final = m[1].trim(); r.checks = attempt ? 'passed on retry' : 'passed'; return r; }
-      problem = run.ok ? 'answer() produced no value' : ((/ANSWER CHECK: (.*)/.exec(run.err) || [])[1] || 'it failed with: ' + run.err);
+      // The reason is on the "TypeError: ANSWER CHECK: ..." line -- not the traceback's copy of the raise statement.
+      problem = run.ok ? 'answer() produced no value' : ((/TypeError: ANSWER CHECK: (.*)/.exec(run.err) || [])[1] || 'it failed with: ' + run.err);
     }
     r.problems.push(problem);
     if (attempt === 1) break;

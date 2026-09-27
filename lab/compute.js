@@ -1,7 +1,7 @@
 // Compute lab page: Gemini Nano reasons and writes Python; Pyodide runs it in a
 // locked worker (py-worker.js); plain code scores it (compute-core.js).
 // Model text is only ever rendered as text.
-import { CASES, PROMPT_TOOLS, PROMPT_TOOLS_STRICT, PROMPT_PLAIN, extractPython, check, looksComputable, NUDGE } from './compute-core.js';
+import { CASES, PROMPT_TOOLS, PROMPT_TOOLS_STRICT, PROMPT_PLAIN, extractPython, check, looksComputable, NUDGE, typedAnswer } from './compute-core.js';
 
 const IO = { expectedInputs: [{ type: 'text', languages: ['en'] }], expectedOutputs: [{ type: 'text', languages: ['en'] }] };
 const $ = (id) => document.getElementById(id);
@@ -76,8 +76,23 @@ async function followUp(session, text) {
   finally { clearTimeout(timer); }
 }
 
+// Typed answers: the shared pipeline in compute-core.js, run on Nano + Pyodide.
+async function withTyped(q, onText) {
+  let session = null, modelMs = 0, pyMs = 0;
+  const timed = async (p) => { const t0 = performance.now(); try { return await p; } finally { modelMs += Math.round(performance.now() - t0); } };
+  try {
+    const r = await typedAnswer(q, {
+      first: async (system, text) => { const a = await ask(system, text, onText); session = a.session; modelMs += a.ms; return a.reply; },
+      again: (text) => timed(followUp(session, text)),
+      py: async (code) => { const x = await runPython(code); pyMs += x.ms || 0; return x; },
+    });
+    return Object.assign(r, { modelMs, pyMs });
+  } finally { try { session && session.destroy(); } catch {} }
+}
+
 // One question through the tools pipeline: reason -> code -> run -> (one repair) -> answer.
 async function withTools(q, onText) {
+  if ($('typed').checked) return withTyped(q, onText);
   const r = { reply: '', code: null, out: null, err: null, repaired: false, modelMs: 0, pyMs: 0 };
   const { session, reply, ms } = await ask($('strict').checked ? PROMPT_TOOLS_STRICT : PROMPT_TOOLS, q, onText);
   Object.assign(r, { reply, modelMs: ms });
@@ -150,6 +165,7 @@ function showDetail(c) {
     box.append(h('h4', 'With tools, run ' + (i + 1) + ' — ' + (x.pass ? 'pass' : 'fail') + (x.repaired ? ' (repaired)' : '')));
     box.append(h('pre', x.reply));
     if (x.code) box.append(h('p', 'Ran:', 'muted'), h('pre', x.code2 || x.code), h('p', 'Output: ' + (x.out != null ? x.out : '(none)') + (x.err ? ' · error: ' + x.err : ''), 'muted'));
+    if (x.typed && x.code) box.append(h('p', 'Type: ' + x.type + ' (inferred ' + (x.inferred || '–') + ', declared ' + (x.declared || '–') + ')' + (x.typeMismatch ? ' — MISMATCH' : '') + (x.problems.length ? ' · rejected: ' + x.problems.join(' | ') : ''), 'muted'));
   });
   r.plain.forEach((x, i) => box.append(h('h4', 'Plain, run ' + (i + 1) + ' — ' + (x.pass ? 'pass' : 'fail')), h('pre', x.reply)));
 }
@@ -206,7 +222,7 @@ async function runCases(list, resume = false) {
 function report() {
   const t = totals();
   const lines = ['compute-lab results · ' + new Date().toISOString().slice(0, 16) + ' · ' + (navigator.userAgentData ? navigator.userAgentData.brands.map((b) => b.brand + ' ' + b.version).join(', ') : navigator.userAgent),
-    'Tool prompt: ' + ($('strict').checked ? 'strict' : 'lenient') + ' · nudge: ' + ($('nudge').checked ? 'on' : 'off') + ' · runs each: ' + $('runs').value + ' · Python ' + (pyInfo ? pyInfo.version + ', loaded in ' + pyInfo.ms + ' ms' : 'not loaded') + ' · requests after Python loaded: ' + netCount(),
+    'Mode: ' + ($('typed').checked ? 'TYPED' : 'plain code') + ' · tool prompt: ' + ($('strict').checked ? 'strict' : 'lenient') + ' · nudge: ' + ($('nudge').checked ? 'on' : 'off') + ' · runs each: ' + $('runs').value + ' · Python ' + (pyInfo ? pyInfo.version + ', loaded in ' + pyInfo.ms + ' ms' : 'not loaded') + ' · requests after Python loaded: ' + netCount(),
     'TOTALS ' + JSON.stringify(t), '',
     'id | kind | with tools pass | used code | repaired | plain pass | model ms | first output'];
   for (const c of CASES) {
@@ -219,7 +235,7 @@ function report() {
   lines.push('', 'FAILURES (reply, code, output)');
   for (const c of CASES) {
     const r = results.get(c.id); if (!r) continue;
-    r.tools.forEach((x, i) => { if (!x.pass) lines.push('#' + c.id + ' tools run ' + (i + 1) + ': reply=' + JSON.stringify((x.reply || '').slice(0, 400)) + ' code=' + JSON.stringify(x.code2 || x.code || null) + ' out=' + JSON.stringify(x.out) + (x.err ? ' err=' + JSON.stringify(x.err) : '')); });
+    r.tools.forEach((x, i) => { if (!x.pass || x.repaired || x.typeMismatch) lines.push('#' + c.id + ' tools run ' + (i + 1) + (x.pass ? ' (passed)' : '') + ': reply=' + JSON.stringify((x.reply || '').slice(0, 400)) + ' code=' + JSON.stringify(x.code2 || x.code || null) + ' out=' + JSON.stringify(x.out) + (x.err ? ' err=' + JSON.stringify(x.err) : '') + (x.typed ? ' type=' + x.type + ' inferred=' + x.inferred + ' declared=' + x.declared + (x.problems.length ? ' rejected=' + JSON.stringify(x.problems) : '') : '')); });
     r.plain.forEach((x, i) => { if (!x.pass) lines.push('#' + c.id + ' plain run ' + (i + 1) + ': ' + JSON.stringify((x.reply || '').slice(0, 200))); });
   }
   return lines.join('\n');
