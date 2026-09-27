@@ -47,6 +47,28 @@ export const CASES = [
   { id: 27, code: true, q: 'What is the average of 12, 15 and 27?', num: 18 },
   { id: 28, code: true, q: 'Spell the word "necessary" backwards.', text: ['yrassecen'] },
   { id: 29, code: true, q: 'What is 15% of 80, plus 7?', num: 19 },
+  // HELD-OUT (2026-09-28 00:05): written and committed before the next fixes, after
+  // four rounds of changes tuned on 1-29. Run once per model with the pipeline
+  // frozen; never tuned on. 46 deliberately has no digit or quoted word, to test
+  // whether the plain-code gate lets it through.
+  { id: 30, held: true, code: true, q: 'How many times does the letter a appear in "banana"?', num: 3 },
+  { id: 31, held: true, code: true, q: 'How many letters are in the word "rhythm"?', num: 6 },
+  { id: 32, held: true, code: true, q: 'What is 356 × 47?', num: 16732 },
+  { id: 33, held: true, code: true, q: 'What is 12.5% of 360?', num: 45 },
+  { id: 34, held: true, code: true, q: 'An £85 meal has a 12% service charge added. What is the total in pounds?', num: 95.2 },
+  { id: 35, held: true, code: true, q: 'I buy 4 packs of 6 rolls and eat 7. How many rolls are left?', num: 17 },
+  { id: 36, held: true, code: true, q: 'What is 3 to the power of 20?', num: 3486784401 },
+  { id: 37, held: true, code: true, q: 'What is 22 divided by 7, to 3 decimal places?', text: ['3.143'] },
+  { id: 38, held: true, code: true, q: 'A film starts at 19:40 and lasts 2 hours 35 minutes. What time does it end?', text: ['22:15', '10:15'] },
+  { id: 39, held: true, code: true, q: 'What day of the week is 60 days after Monday 5 October 2026?', ...day('friday') },
+  { id: 40, held: true, code: true, q: 'What date is 90 days after 15 January 2027?', ...date('2027-04-15') },
+  { id: 41, held: true, code: true, q: 'How many days are there between 1 January 2027 and 1 June 2027?', num: 151 },
+  { id: 42, held: true, code: true, q: 'Is 2032 a leap year?', text: ['yes', 'true'], not: ['no', 'false'] },
+  { id: 43, held: true, code: false, q: 'What is the capital of Australia?', text: ['canberra'] },
+  { id: 44, held: true, code: false, q: 'How many continents are there?', num: 7 },
+  { id: 45, held: true, code: false, q: 'Translate "thank you" into Spanish.', text: ['gracias'] },
+  { id: 46, held: true, code: true, q: 'Sort these words alphabetically: pear, apple, mango.', compact: 'apple,mango,pear' },
+  { id: 47, held: true, code: true, q: 'What is the average of 4, 9 and 20?', num: 11 },
 ];
 
 export const PROMPT_TOOLS = 'You are a helpful, concise assistant. You cannot see the individual letters of words, and you make arithmetic and date mistakes. '
