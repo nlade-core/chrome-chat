@@ -40,6 +40,13 @@ export const CASES = [
   { id: 22, code: false, q: 'What is the boiling point of water at sea level, in degrees Celsius?', num: 100 },
   { id: 23, code: false, q: 'Translate "good morning" into French.', text: ['bonjour'] },
   { id: 24, code: false, q: 'Rewrite "the meeting is moved to thursday" as a polite one-sentence email line.', text: ['thursday'] },
+  // Added with typed answers (2026-09-27, before any typed run): computations whose
+  // answer type the plain-code rules can't infer, so the model's own declared type is exercised.
+  { id: 25, code: true, q: 'Is 2027 a leap year?', text: ['no', 'false'], not: ['yes', 'true'] },
+  { id: 26, code: true, q: 'Sort these numbers from smallest to largest: 42, 7, 19, 3.', compact: '3,7,19,42' },
+  { id: 27, code: true, q: 'What is the average of 12, 15 and 27?', num: 18 },
+  { id: 28, code: true, q: 'Spell the word "necessary" backwards.', text: ['yrassecen'] },
+  { id: 29, code: true, q: 'What is 15% of 80, plus 7?', num: 19 },
 ];
 
 export const PROMPT_TOOLS = 'You are a helpful, concise assistant. You cannot see the individual letters of words, and you make arithmetic and date mistakes. '
@@ -58,7 +65,7 @@ export const PROMPT_PLAIN = 'You are a helpful, concise assistant.';
 // and, if the reply came back without code, asks once more for the code.
 // (Month/weekday names and bare quotes were tried first and nudged the
 // near-misses "Translate "good morning"" and "...moved to thursday" into code.)
-export const looksComputable = (q) => /\d/.test(q) || (/"[^"]+"/.test(q) && /\b(letters?|how many|count)\b/i.test(q));
+export const looksComputable = (q) => /\d/.test(q) || (/"[^"]+"/.test(q) && /\b(letters?|how many|count|spell|backwards)\b/i.test(q)); // spell/backwards added with case 28
 export const NUDGE = 'Please answer that with a ```python code block that prints only the final answer, as instructed.';
 export const extractPython = (reply) => (/```(?:python|py)?[ \t]*\n([\s\S]*?)```/i.exec(reply || '') || [])[1] || null;
 
@@ -73,5 +80,141 @@ export function check(c, out) {
     if (typeof c.num === 'bigint') return nums.some((n) => /^\d+$/.test(n) && BigInt(n) === c.num);
     return nums.some((n) => Math.abs(Number(n) - c.num) < 1e-6);
   }
+  if (c.compact) return s.replace(/[\s\[\]()]/g, '').includes(c.compact);
   return c.text.some((t) => s.includes(t)) && !(c.not || []).some((t) => s.includes(t));
+}
+
+// ------------------------------------------------------------------ typed answers
+// The model declares the answer's type and returns it from answer(); a fixed
+// wrapper (not the model's code) checks the type and formats the value. Plain
+// code also infers the type from the question where it can, and that wins.
+// A second check: the code must use the question's own values (the quoted
+// word, the numbers) -- a hard-coded guess fails it. One retry with the reason.
+
+export function inferType(q) {
+  const dp = /(\d+) decimal places?/i.exec(q);
+  if (dp) return 'decimal:' + dp[1];
+  if (/day of the week/i.test(q)) return 'weekday';
+  if (/\b(what|which) date\b/i.test(q)) return 'date';
+  if (/\bwhat time\b/i.test(q)) return 'time';
+  if (/\bhow many\b|\bnumber of\b/i.test(q)) return 'int';
+  if (/£|\bin pounds\b|\bprice\b/i.test(q)) return 'decimal:2';
+  return null;
+}
+export const declaredType = (code) => ((/ANSWER_TYPE\s*=\s*["']([^"']+)["']/.exec(code || '') || [])[1] || '').trim().toLowerCase() || null;
+
+// The question's own values the code doesn't mention (empty = fine).
+export function missingInputs(q, code) {
+  const miss = [];
+  for (const m of q.matchAll(/"([^"]+)"/g)) if (!code.includes(m[1])) miss.push('"' + m[1] + '"');
+  const nums = new Set(q.replace(/\d+ decimal places?/gi, '').match(/\d+(?:\.\d+)?/g) || []);
+  for (const n of nums) if (!new RegExp('(?<!\\d)' + n.replace('.', '\\.') + '(?!\\d)').test(code)) miss.push(n);
+  return miss;
+}
+
+export const PROMPT_TYPED = 'You are a helpful, concise assistant. You cannot see the individual letters of words, and you make arithmetic and date mistakes. '
+  + 'So for ANY question that involves counting letters, numbers, arithmetic, percentages, dates or times -- even if it looks easy and even if you think you know the answer -- never work it out in your head: '
+  + 'think briefly, then write one ```python code block (standard library only) that (1) sets ANSWER_TYPE to one of "int", "number", "decimal:N" (N decimal places), "date", "weekday", "time", "text", '
+  + 'and (2) defines def answer(): which computes the result from the question\'s own values and returns it (an int, float, datetime.date or str). '
+  + 'Do not print anything: the code will be run, checked and formatted for you. If the question needs no calculation, answer it directly and briefly, with no code.';
+export const NUDGE_TYPED = 'Please answer that with a ```python code block that sets ANSWER_TYPE and defines def answer(), as instructed.';
+
+// Appended to the model's code. Checks answer()'s value against the type and
+// prints it with a marker; a failed check raises "ANSWER CHECK: <reason>".
+export const pyWrapper = (type) => String.raw`
+import datetime as _dt, re as _re
+_T = ${JSON.stringify(type)}
+if _T == "model":
+    _T = str(globals().get("ANSWER_TYPE", "text")).strip().lower()
+_r = answer()
+def _bad(msg):
+    raise TypeError("ANSWER CHECK: answer() returned " + repr(_r)[:60] + " (" + type(_r).__name__ + "); " + msg)
+def _num():
+    if isinstance(_r, bool) or not isinstance(_r, (int, float)):
+        _bad("this question needs a number")
+_W = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+if _T == "int":
+    _num()
+    if isinstance(_r, float):
+        if not _r.is_integer():
+            _bad("this question needs a whole number")
+        _r = int(_r)
+    _out = str(_r)
+elif _T == "number":
+    _num()
+    _out = str(_r) if isinstance(_r, int) else repr(round(_r, 10))
+elif _T.startswith("decimal:"):
+    _num()
+    _out = format(_r, "." + _T.split(":")[1] + "f")
+elif _T == "date":
+    if isinstance(_r, _dt.datetime):
+        _r = _r.date()
+    if isinstance(_r, str):
+        try:
+            _r = _dt.date.fromisoformat(_r.strip())
+        except ValueError:
+            _bad("this question needs a date (a datetime.date or 'YYYY-MM-DD')")
+    if not isinstance(_r, _dt.date):
+        _bad("this question needs a date")
+    _out = _r.isoformat()
+elif _T == "weekday":
+    if isinstance(_r, (_dt.date, _dt.datetime)):
+        _r = _r.strftime("%A")
+    if not isinstance(_r, str) or _r.strip().capitalize() not in _W:
+        _bad("this question needs a weekday name")
+    _out = _r.strip().capitalize()
+elif _T == "time":
+    if isinstance(_r, (_dt.datetime, _dt.time)):
+        _r = _r.strftime("%H:%M")
+    _m = _re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", _r) if isinstance(_r, str) else None
+    if not _m or int(_m.group(1)) > 23 or int(_m.group(2)) > 59:
+        _bad("this question needs a time as HH:MM")
+    _out = "%02d:%s" % (int(_m.group(1)), _m.group(2))
+else:
+    if isinstance(_r, bool):
+        _out = "yes" if _r else "no"
+    elif isinstance(_r, (list, tuple)):
+        _out = ", ".join(str(x) for x in _r)
+    else:
+        _out = str(_r)
+print("__ANSWER__=" + _out)
+`;
+
+// The whole typed pipeline, shared by the page and the stand-in runner.
+// io: { first(system, q) -> reply, again(text) -> reply (same conversation), py(code) -> { ok, out, err } }
+export async function typedAnswer(q, io) {
+  const r = { typed: true, inferred: inferType(q), problems: [], repaired: false };
+  r.reply = await io.first(PROMPT_TYPED, q);
+  r.code = extractPython(r.reply);
+  if (!r.code && looksComputable(q)) {
+    r.nudged = true;
+    const more = await io.again(NUDGE_TYPED);
+    r.reply += '\n\n[nudged]\n\n' + more;
+    r.code = extractPython(more);
+  }
+  if (!r.code) { r.final = r.reply; return r; }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    r.declared = declaredType(r.code);
+    r.type = r.inferred || r.declared || 'text';
+    r.typeMismatch = !!(r.inferred && r.declared && r.inferred !== r.declared);
+    const missing = missingInputs(q, r.code);
+    let problem = null;
+    if (!/def\s+answer\s*\(/.test(r.code)) problem = 'define def answer(): that returns the final value';
+    else if (missing.length) problem = 'compute from the question\'s own values -- your code does not use ' + missing.join(', ');
+    else {
+      const run = await io.py(r.code + '\n' + pyWrapper(r.type));
+      const m = run.ok && /__ANSWER__=(.*)$/m.exec(run.out);
+      if (m) { r.out = r.final = m[1].trim(); r.checks = attempt ? 'passed on retry' : 'passed'; return r; }
+      problem = run.ok ? 'answer() produced no value' : ((/ANSWER CHECK: (.*)/.exec(run.err) || [])[1] || 'it failed with: ' + run.err);
+    }
+    r.problems.push(problem);
+    if (attempt === 1) break;
+    r.repaired = true;
+    const fix = await io.again('Your code was rejected: ' + problem + '. Reply with only a corrected ```python code block (ANSWER_TYPE and def answer()).');
+    const c2 = extractPython(fix);
+    if (!c2) break;
+    r.code2 = r.code = c2;
+  }
+  r.final = ''; r.out = null; r.err = r.problems[r.problems.length - 1];
+  return r;
 }
