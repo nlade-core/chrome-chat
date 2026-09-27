@@ -28,6 +28,17 @@ import urllib.error
 import urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    # Pass kiwix-serve's redirects (e.g. "Eiffel_tower" -> "Eiffel_Tower")
+    # through to the browser instead of following them here, so the page
+    # sees the real article path in the final URL.
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+PROXY = urllib.request.build_opener(NoRedirect)
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KIWIX_DIR = os.path.expanduser('~/Downloads/kiwix')
 
@@ -76,18 +87,32 @@ def main():
                 self.wfile.write(body)
                 return
             if self.path.startswith('/kiwix/'):
-                try:
-                    with urllib.request.urlopen(upstream + self.path, timeout=30) as r:
-                        body, status, ctype = r.read(), r.status, r.headers.get('Content-Type', 'application/octet-stream')
-                except urllib.error.HTTPError as e:
-                    body, status, ctype = e.read(), e.code, e.headers.get('Content-Type', 'text/plain')
-                self.send_response(status)
-                self.send_header('Content-Type', ctype)
-                self.send_header('Content-Length', str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
+                return self.proxy('GET')
             super().do_GET()
+
+        def do_HEAD(self):
+            # The page checks whether an exact article path exists with HEAD.
+            if self.path.startswith('/kiwix/'):
+                return self.proxy('HEAD')
+            super().do_HEAD()
+
+        def proxy(self, method):
+            req = urllib.request.Request(upstream + self.path, method=method)
+            location = None
+            try:
+                with PROXY.open(req, timeout=30) as r:
+                    body, status, ctype = r.read(), r.status, r.headers.get('Content-Type', 'application/octet-stream')
+            except urllib.error.HTTPError as e:
+                body, status, ctype = e.read(), e.code, e.headers.get('Content-Type', 'text/plain')
+                location = e.headers.get('Location')
+            self.send_response(status)
+            self.send_header('Content-Type', ctype)
+            if location:
+                self.send_header('Location', location)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            if method != 'HEAD':
+                self.wfile.write(body)
 
         def log_message(self, fmt, *a):
             where = 'kiwix (on disk)' if self.path.startswith('/kiwix/') else 'chrome-chat files'

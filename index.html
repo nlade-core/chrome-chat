@@ -337,7 +337,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-26 08:26 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-27 13:01 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -347,8 +347,11 @@
         <p>This runs entirely inside your own browser, on your own device. There is no server, no account, no API key, and nothing you type or attach is ever sent to any server of ours — the model answering you (Gemini Nano) is built into Chrome itself and runs locally.</p>
         <p><strong>One disclosed exception:</strong> if you paste a link to a GitHub repo, a Wikipedia article, or a Hacker News item, chrome-chat fetches that page's public data directly from GitHub's/Wikipedia's/Hacker News's own API (never through any server of ours) so the model can see it. Only the URL you pasted is sent, only to that one service, and only when the link is recognized.</p>
         <p><strong>What's stored, and where:</strong> conversations live in this browser's own <code>localStorage</code>; any attached images or audio live in this browser's own IndexedDB. Both stay on this device — clearing your browser data removes them for good, and nothing here is backed up anywhere else.</p>
+        <p><strong>Offline Wikipedia (optional):</strong> connect a Kiwix <code>.zim</code> file (from <a href="https://library.kiwix.org" target="_blank" rel="noopener">library.kiwix.org</a>) and <code>/wiki:offline &lt;question&gt;</code> answers from it. It's read in place on this device by Kiwix's own reader running inside this page -- never uploaded, never copied -- so the whole question-and-answer round trip needs no network at all.
+          <span id="offline-status" style="display:block;margin-top:0.35rem;">Not connected.</span>
+          <span style="display:flex;gap:0.5rem;margin-top:0.4rem;"><button type="button" id="offline-connect-btn" class="icon-btn">Connect a .zim file…</button><button type="button" id="offline-disconnect-btn" class="icon-btn" style="display:none;">Disconnect</button></span></p>
         <p><strong>Requirements:</strong> branded Google Chrome (desktop), a recent enough version to support the on-device Prompt API. It won't work in other browsers, or in plain Chromium.</p>
-        <p><strong>Fully open source</strong> — every line of what's running is in the public repository linked in the sidebar, nothing hidden.</p>
+        <p><strong>Fully open source</strong> (GPL-3.0) — every line of what's running is in the public repository linked in the sidebar, nothing hidden. Offline Wikipedia uses <a href="https://github.com/openzim/javascript-libzim" target="_blank" rel="noopener">Kiwix's libzim</a> (GPL-3.0); Wikipedia text is CC BY-SA 4.0.</p>
       </div>
     </div>
 
@@ -888,6 +891,7 @@
               ? '<div class="msg-actions"><button class="icon-btn edit-btn" data-i="' + i + '">Edit</button></div>' : '';
             const urlCite = m.urlContext
               ? '<div class="msg-url-context">🔗 <a href="' + escapeHtml(m.urlContext.revision ? m.urlContext.url + '?oldid=' + m.urlContext.revision : m.urlContext.url) + '" target="_blank" rel="noopener">' + escapeHtml(m.urlContext.label) + '</a>'
+                + (m.urlContext.offline ? ' <span class="cite-meta">· offline copy · text <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a></span>' : '')
                 + (m.urlContext.revision ? ' <span class="cite-meta">· revision of ' + escapeHtml(formatRevisionDate(m.urlContext.timestamp)) + ' · text <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a></span>' : '')
                 + (m.urlContext.text ? '<details><summary>Show what was fetched</summary><pre>' + escapeHtml(m.urlContext.text) + '</pre></details>' : '')
                 + '</div>'
@@ -2007,35 +2011,259 @@
       return !!t.trim() && normTitle(query).includes(t);
     }
 
-    // /wiki:offline <question> -- the same pipeline against a local copy of
-    // Wikipedia: a Kiwix ZIM file served by kiwix-serve, proxied under
-    // /kiwix/ on the SAME origin as this page by offline/serve.py. Only
-    // exists when the page is served that way (/kiwix/book answers with the
-    // loaded ZIM's name). With the model on-device and Wikipedia on disk, a
-    // whole question-and-answer round trip touches nothing but localhost.
-    // Plain /wiki falls back to it automatically when the browser is offline.
-    // A "mini" ZIM holds lead sections + infoboxes only, so offline answers
-    // work from the intro and the infobox facts; follow-ups can't go deeper.
-    let offlineBookPromise = null;
-    function offlineBook() {
-      if (!offlineBookPromise) offlineBookPromise = fetch('/kiwix/book').then((r) => (r.ok ? r.text() : null)).catch(() => null);
-      return offlineBookPromise;
-    }
-    async function offlineCandidates(book, query, limit) {
+    // /wiki:offline <question> -- the same pipeline against an offline copy
+    // of Wikipedia (a Kiwix ZIM file), from either of two interchangeable
+    // backends, so the ranking and extraction below are shared:
+    //   - a .zim file the visitor picks, read INSIDE the page by Kiwix's
+    //     libzim compiled to WebAssembly (vendor/libzim/, GPL-3.0), running
+    //     in a Web Worker. Works on the public site with nothing installed;
+    //     the file is read in slices straight from disk -- never uploaded,
+    //     never copied. Spike in headless Chrome 154 on the 14.4 GB English
+    //     mini ZIM: opened in 0.67s, suggest 16-180ms, search 50-430ms,
+    //     article 6-53ms (one outlier ~1.2s for "world war ii").
+    //   - kiwix-serve proxied under /kiwix/ on the same origin by
+    //     offline/serve.py (only when the page is served that way).
+    // With the model on-device and Wikipedia on disk, a whole question-and-
+    // answer round trip makes no network request at all. Plain /wiki falls
+    // back to it automatically when the browser is offline. A "mini" ZIM
+    // holds lead sections + infoboxes only, so offline answers work from the
+    // intro and the infobox facts; follow-ups can't go deeper.
+    //
+    // Backend: { name, lang, kind, suggest(term, n) -> [{title, path}],
+    //            search(q, n) -> [{title, path}], html(path) -> string,
+    //            entry(path) -> {title, path} | null  (exact path, redirects
+    //            followed), citeUrl(path) }
+    const zimLang = (name) => (/_([a-z]{2,3})_/.exec(name) || [])[1] || 'en';
+    const zimDate = (name) => (/_(\d{4}-\d{2})$/.exec(name) || [])[1] || '';
+    const encPath = (path) => path.split('/').map(encodeURIComponent).join('/');
+    function httpBackend(book) {
       const enc = encodeURIComponent;
-      const suggest = (term) => fetch('/kiwix/suggest?content=' + enc(book) + '&term=' + enc(term) + '&count=5').then((r) => r.json()).catch(() => []);
-      const [sug, xml] = await Promise.all([
-        suggest(query),
-        fetch('/kiwix/search?books.name=' + enc(book) + '&pattern=' + enc(query) + '&format=xml&pageLength=' + limit).then((r) => r.text()).catch(() => ''),
-      ]);
-      const asCandidate = (title, link) => ({ title, url: location.origin + link, offline: true });
+      const prefix = '/kiwix/content/' + book + '/';
+      return {
+        name: book, lang: zimLang(book), kind: 'server',
+        async suggest(term, n) {
+          const r = await fetch('/kiwix/suggest?content=' + enc(book) + '&term=' + enc(term) + '&count=' + n).then((x) => x.json()).catch(() => []);
+          return r.filter((x) => x.kind === 'path').map((x) => ({ title: x.value, path: x.path }));
+        },
+        async search(q, n) {
+          const xml = await fetch('/kiwix/search?books.name=' + enc(book) + '&pattern=' + enc(q) + '&format=xml&pageLength=' + n).then((x) => x.text()).catch(() => '');
+          return [...new DOMParser().parseFromString(xml, 'text/xml').querySelectorAll('item')].map((it) => {
+            const link = it.querySelector('link').textContent;
+            let path = link.startsWith(prefix) ? link.slice(prefix.length) : link;
+            try { path = decodeURIComponent(path); } catch {}
+            return { title: it.querySelector('title').textContent, path };
+          });
+        },
+        async html(path) {
+          const res = await fetch(prefix + encPath(path));
+          if (!res.ok) throw new Error('offline copy returned HTTP ' + res.status);
+          return res.text();
+        },
+        async entry(path) {
+          const res = await fetch(prefix + encPath(path), { method: 'HEAD' }).catch(() => null);
+          if (!res || !res.ok) return null;
+          let final = res.url.includes(prefix) ? res.url.slice(res.url.indexOf(prefix) + prefix.length) : path;
+          try { final = decodeURIComponent(final); } catch {}
+          return { title: final.replace(/_/g, ' '), path: final };
+        },
+        citeUrl: (path) => location.origin + prefix + encPath(path),
+      };
+    }
+    // Every pending call is rejected if the worker dies (a libzim exception
+    // surfaces as a worker error, not a reply), so nothing hangs to timeout.
+    function workerBackend(file) {
+      const worker = new Worker('vendor/libzim/libzim-wasm.js');
+      const pending = new Set();
+      let broken = null;
+      worker.onerror = (e) => {
+        broken = new Error('offline reader stopped (' + (e.message || 'worker error') + ')');
+        for (const p of pending) p.reject(broken);
+        pending.clear();
+      };
+      const call = (msg, ms = 20000) => new Promise((resolve, reject) => {
+        if (broken) return reject(broken);
+        const ch = new MessageChannel();
+        const p = { reject };
+        const t = setTimeout(() => { pending.delete(p); reject(new Error('offline reader timed out')); }, ms);
+        pending.add(p);
+        ch.port1.onmessage = (e) => { clearTimeout(t); pending.delete(p); resolve(e.data); };
+        worker.postMessage(msg, [ch.port2]);
+      });
+      const name = file.name.replace(/\.zim$/i, '');
+      return {
+        name, lang: zimLang(name), kind: 'file', file,
+        isBroken: () => !!broken,
+        // Opening reads only the ZIM header and indexes, not the file.
+        ready: call({ action: 'init', files: [file] }, 60000).then(() => call({ action: 'getArticleCount' })),
+        async suggest(term, n) { return (await call({ action: 'suggest', text: term, numResults: n })).suggestions || []; },
+        async search(q, n) { return ((await call({ action: 'search', text: q, numResults: n })).results || []).map(({ title, path }) => ({ title, path })); },
+        async html(path) {
+          const r = await call({ action: 'getEntryByPath', path, follow: true });
+          if (!r.content || !r.content.length) throw new Error('"' + path + '" is not in the offline copy');
+          return new TextDecoder().decode(r.content);
+        },
+        async entry(path) {
+          const r = await call({ action: 'getEntryByPath', path, follow: false });
+          const final = r.isRedirect ? r.redirectPath : r.content && r.content.length ? path : null;
+          return final ? { title: final.replace(/_/g, ' '), path: final } : null;
+        },
+        // No local page to link to -- cite the article on Wikipedia itself,
+        // which is also what CC BY-SA attribution wants.
+        citeUrl: (path) => 'https://' + zimLang(name) + '.wikipedia.org/wiki/' + encPath(path),
+        close() { worker.terminate(); },
+      };
+    }
+
+    // Connecting a file. The FileSystemFileHandle (a reference, not the
+    // file) is remembered in its own IndexedDB so a returning visitor isn't
+    // asked to find the file again -- only, at most, to re-allow reading it:
+    // Chrome grants that permission per session unless the visitor chose
+    // "allow on every visit". Re-asking needs a user gesture, which pressing
+    // Enter or clicking the chip's Reconnect button both are.
+    const OFFLINE_DB = 'chrome-chat-offline';
+    function offlineDb() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(OFFLINE_DB, 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('handles');
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+    async function zimHandleStore(mode, fn) {
+      const db = await offlineDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('handles', mode);
+        const req = fn(tx.objectStore('handles'));
+        tx.oncomplete = () => resolve(req && req.result);
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+    const loadZimHandle = () => zimHandleStore('readonly', (st) => st.get('zim')).catch(() => null);
+    const saveZimHandle = (h) => zimHandleStore('readwrite', (st) => st.put(h, 'zim')).catch(() => {});
+    const clearZimHandle = () => zimHandleStore('readwrite', (st) => st.delete('zim')).catch(() => {});
+
+    let offlineFileBackend = null;   // stage B, once a file is open
+    let offlineConnecting = null;    // single-flight open
+    let offlineNeedsPermission = null; // a remembered handle waiting on a gesture
+    let offlineServerPromise = null; // route A, probed once
+    function serverBackend() {
+      if (!offlineServerPromise) {
+        offlineServerPromise = fetch('/kiwix/book').then((r) => (r.ok ? r.text() : null))
+          .then((b) => (b && b.trim() && !/</.test(b) ? httpBackend(b.trim()) : null)).catch(() => null);
+      }
+      return offlineServerPromise;
+    }
+    async function openOfflineFile(file) {
+      const backend = workerBackend(file);
+      try {
+        backend.articleCount = await backend.ready;
+      } catch (e) {
+        backend.close();
+        throw new Error("couldn't open " + file.name + ' as a Kiwix ZIM file (' + e.message + ')');
+      }
+      if (offlineFileBackend) offlineFileBackend.close();
+      offlineFileBackend = backend;
+      offlineNeedsPermission = null;
+      renderOfflineStatus();
+      return backend;
+    }
+    async function restoreOfflineFile(allowPrompt) {
+      const h = await loadZimHandle();
+      if (!h) return null;
+      let perm = await h.queryPermission({ mode: 'read' });
+      if (perm === 'prompt' && allowPrompt && navigator.userActivation && navigator.userActivation.isActive) perm = await h.requestPermission({ mode: 'read' });
+      if (perm !== 'granted') { offlineNeedsPermission = h; renderOfflineStatus(); return null; }
+      return openOfflineFile(await h.getFile());
+    }
+    async function getOfflineBackend({ allowPrompt = false } = {}) {
+      if (offlineFileBackend && !offlineFileBackend.isBroken()) return offlineFileBackend;
+      if (offlineFileBackend) { offlineFileBackend.close(); offlineFileBackend = null; renderOfflineStatus(); }
+      if (!offlineConnecting) offlineConnecting = restoreOfflineFile(allowPrompt).catch((e) => { console.warn('[chrome-chat] offline file restore failed --', e); return null; }).finally(() => { offlineConnecting = null; });
+      return (await offlineConnecting) || serverBackend();
+    }
+    // Always from a click, so the picker (and any permission prompt) has
+    // its user gesture.
+    async function pickOfflineFile() {
+      if (!self.showOpenFilePicker) throw new Error('this browser cannot open local files here');
+      const [h] = await showOpenFilePicker({ types: [{ description: 'Kiwix ZIM file', accept: { 'application/octet-stream': ['.zim'] } }] });
+      const backend = await openOfflineFile(await h.getFile());
+      await saveZimHandle(h);
+      return backend;
+    }
+    async function reconnectOfflineFile() {
+      const h = offlineNeedsPermission || (await loadZimHandle());
+      if (!h) return pickOfflineFile();
+      if ((await h.requestPermission({ mode: 'read' })) !== 'granted') throw new Error('reading the file was not allowed');
+      return openOfflineFile(await h.getFile());
+    }
+    async function disconnectOfflineFile() {
+      if (offlineFileBackend) offlineFileBackend.close();
+      offlineFileBackend = null;
+      offlineNeedsPermission = null;
+      await clearZimHandle();
+      renderOfflineStatus();
+    }
+    // Wired up from the END of the script (see the initOfflineUi() call):
+    // the About panel's buttons are created long before the functions and
+    // `const`s they use exist, and touching those earlier throws a
+    // temporal-dead-zone error that stops the whole module -- caught by the
+    // headless end-to-end test, not by the function-level ones.
+    function initOfflineUi() {
+      document.getElementById('offline-connect-btn').addEventListener('click', async () => {
+        try { await (offlineNeedsPermission && !offlineFileBackend ? reconnectOfflineFile() : pickOfflineFile()); }
+        catch (e) { if (!e || e.name !== 'AbortError') document.getElementById('offline-status').textContent = "Couldn't open that file (" + e.message + ')'; }
+      });
+      document.getElementById('offline-disconnect-btn').addEventListener('click', disconnectOfflineFile);
+      // Show a remembered file on load, without opening it or prompting.
+      loadZimHandle().then(async (h) => {
+        if (!h || offlineFileBackend) return;
+        if ((await h.queryPermission({ mode: 'read' })) === 'granted') getOfflineBackend().catch(() => {});
+        else { offlineNeedsPermission = h; renderOfflineStatus(); }
+      });
+    }
+    function renderOfflineStatus() {
+      const el = document.getElementById('offline-status');
+      if (!el) return;
+      const b = offlineFileBackend;
+      el.textContent = b
+        ? 'Connected: ' + b.file.name + ' (' + (b.file.size / 1e9).toFixed(1) + ' GB, ' + Number(b.articleCount || 0).toLocaleString() + ' entries). Use /wiki:offline <question>.'
+        : offlineNeedsPermission
+          ? offlineNeedsPermission.name + ' is remembered -- Chrome will ask to allow reading it again on first use.'
+          : 'Not connected.';
+      document.getElementById('offline-connect-btn').textContent = b ? 'Choose a different file…' : offlineNeedsPermission ? 'Reconnect' : 'Connect a .zim file…';
+      document.getElementById('offline-disconnect-btn').style.display = b || offlineNeedsPermission ? '' : 'none';
+    }
+    // Wikipedia's own capitalisation of a phrase as article paths: first
+    // letter up ("Grassmarket", "Eiffel_tower" -- often a redirect), and
+    // title case with small words kept low and roman numerals up
+    // ("Eiffel_Tower", "University_of_Edinburgh", "World_War_II").
+    const SMALL_WORDS = new Set('of the and in on at to for a an de du la le les des et en von van'.split(' '));
+    function titlePaths(phrase) {
+      const words = phrase.trim().split(/\s+/);
+      const cap = (w) => w.charAt(0).toUpperCase() + w.slice(1);
+      const firstCap = cap(words.join('_'));
+      const titled = words.map((w, i) => (/^[ivxlc]+$/i.test(w) && w.length <= 4 && i > 0 ? w.toUpperCase() : i > 0 && SMALL_WORDS.has(w) ? w : cap(w))).join('_');
+      return [...new Set([firstCap, titled])];
+    }
+    // A phrase that is itself an article title (case-insensitively), or
+    // null. Exact paths first -- a few ms each even in the in-page reader --
+    // and the suggestion index only as a fallback for multi-word phrases,
+    // because in the WebAssembly reader a suggestion lookup for a common
+    // single word ("capital", "scotland") takes 1.5-2.6 s, vs ~40 ms for a
+    // phrase and 6-50 ms for an exact path (measured, Chrome 154).
+    async function exactTitle(backend, phrase) {
+      for (const path of titlePaths(phrase)) {
+        const hit = await backend.entry(path).catch(() => null);
+        if (hit) return hit;
+      }
+      if (!/\s/.test(phrase.trim())) return null;
+      return (await backend.suggest(phrase, 5).catch(() => [])).find((x) => normTitle(x.title) === normTitle(phrase)) || null;
+    }
+    async function offlineCandidates(backend, query, limit) {
+      const [exactHit, items] = await Promise.all([exactTitle(backend, query), backend.search(query, limit).catch(() => [])]);
       const isArticle = (c) => c.title !== 'Main Page';
-      // Exact title first (the offline twin of gsrwhat=nearmatch): a
-      // suggestion whose title IS the query.
-      const exact = sug.filter((x) => x.kind === 'path' && normTitle(x.value) === normTitle(query))
-        .map((x) => asCandidate(x.value, '/kiwix/content/' + book + '/' + x.path));
-      const items = [...new DOMParser().parseFromString(xml, 'text/xml').querySelectorAll('item')]
-        .map((it) => asCandidate(it.querySelector('title').textContent, it.querySelector('link').textContent));
+      // Exact title first (the offline twin of gsrwhat=nearmatch).
+      const exact = exactHit ? [exactHit] : [];
       // Same subject-first rule as online: a result whose title appears in
       // the question outranks one that merely matches its words.
       items.sort((a, b) => Number(titleInQuery(b.title, query)) - Number(titleInQuery(a.title, query)));
@@ -2059,27 +2287,35 @@
             tried.push(span.join(' '));
           }
         }
-        const found = await Promise.all(tried.slice(0, 12).map(async (t) => (await suggest(t)).find((x) => x.kind === 'path' && normTitle(x.value) === normTitle(t))));
+        // Longest runs first, stopping at the first length that has a real
+        // title: a shorter hit could only ever rank below it. This matters
+        // for the in-page reader, whose single worker thread queues every
+        // lookup -- firing all ~12 at once cost it 1-11 s per question in
+        // the parity run (the native server parallelises them).
         // Ties (same length): prefer a title full-text search also returned,
         // then the one later in the question -- English questions tend to
         // put the subject last ("who invented the telephone" -> Telephone,
         // not Invention).
         const inItems = new Set(items.map((c) => normTitle(c.title)));
         const pos = (t) => normTitle(query).indexOf(normTitle(t));
-        spans = found.map((x, k) => x && { x, words: tried[k].split(' ').length, hit: inItems.has(normTitle(x.value)), at: pos(tried[k]) }).filter(Boolean)
-          .sort((a, b) => (b.words - a.words) || (Number(b.hit) - Number(a.hit)) || (b.at - a.at))
-          .map(({ x }) => asCandidate(x.value, '/kiwix/content/' + book + '/' + x.path));
+        const capped = tried.slice(0, 12);
+        for (let n = 4; n >= 1 && !spans.length; n--) {
+          const group = capped.filter((t) => t.split(' ').length === n);
+          if (!group.length) continue;
+          const found = await Promise.all(group.map((t) => exactTitle(backend, t)));
+          spans = found.map((x, k) => x && { x, hit: inItems.has(normTitle(x.title)), at: pos(group[k]) }).filter(Boolean)
+            .sort((a, b) => (Number(b.hit) - Number(a.hit)) || (b.at - a.at))
+            .map(({ x }) => x);
+        }
       }
       let out = [...exact, ...spans, ...items];
       const seen = new Set();
-      return out.filter((c) => isArticle(c) && !seen.has(c.url) && seen.add(c.url));
+      return out.filter((c) => isArticle(c) && !seen.has(c.path) && seen.add(c.path));
     }
     // Intro paragraphs (up to the first h2, so a full ZIM works too) plus
     // the infobox as "label: value" facts -- the mini ZIM's two assets.
-    async function fetchOfflineArticle(candidate) {
-      const res = await fetch(candidate.url);
-      if (!res.ok) throw new Error('offline copy returned HTTP ' + res.status);
-      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    async function fetchOfflineArticle(backend, candidate) {
+      const doc = new DOMParser().parseFromString(await backend.html(candidate.path), 'text/html');
       // Hidden machine-readable copies (e.g. an ISO date in a display:none
       // span next to the visible one) would otherwise be glued into the
       // text, and <br>-separated infobox values ran together
@@ -2102,37 +2338,70 @@
       }
       return { title: clean(doc.querySelector('title') || { textContent: candidate.title }) || candidate.title, lead: cutAtBoundary(paras.join('\n\n'), 3000), facts };
     }
+    // Disambiguation pages have no page-prop marker in a ZIM; the title
+    // suffix and the "may refer to" opening are the reliable tells. A stub
+    // (intro under 200 characters -- "Worth", picked from "is montmartre
+    // worth visiting") is passed over when a fuller candidate follows, and
+    // only used as a last resort. UI-free, so eval/offline-parity.html runs
+    // exactly this against both backends.
+    async function chooseOfflineArticle(backend, candidates, forced) {
+      const isDisambig = (c, a) => /\(disambiguation\)$/i.test(c.title) || (a && /\bmay (?:also )?refer to\b/i.test(a.lead.slice(0, 300)));
+      let stub = null;
+      for (const c of candidates.filter((c) => !isDisambig(c)).slice(0, 4)) {
+        const a = await fetchOfflineArticle(backend, c);
+        if (isDisambig(c, a)) continue;
+        if (a.lead.length < 200 && !forced) { stub = stub || { c, a }; continue; }
+        return { candidate: c, art: a, rest: candidates.filter((x) => x !== c && !isDisambig(x)) };
+      }
+      return stub ? { candidate: stub.c, art: stub.a, rest: candidates.filter((x) => x !== stub.c && !isDisambig(x)) } : null;
+    }
     async function resolveOfflineCommand(trimmed, cmd, forcedCandidate, myToken) {
-      const book = await offlineBook();
-      if (!book) throw new Error('no offline Wikipedia on this page -- run chrome-chat via offline/serve.py');
+      const backend = await getOfflineBackend({ allowPrompt: true });
+      if (myToken !== urlContextToken) return;
+      if (!backend) { offerOfflineConnect(trimmed, cmd, myToken); return; }
       urlContextNameEl.textContent = 'Searching offline Wikipedia for "' + cmd.query + '"…';
-      let candidates = forcedCandidate ? [forcedCandidate] : await offlineCandidates(book, cmd.query, 10);
+      let candidates = forcedCandidate ? [forcedCandidate] : await offlineCandidates(backend, cmd.query, 10);
       if (myToken !== urlContextToken) return;
       if (!candidates.length) throw new Error('nothing in the offline copy matches that');
-      // Disambiguation pages have no page-prop marker in a ZIM; the title
-      // suffix and the "may refer to" opening are the reliable tells.
-      const isDisambig = (c, a) => /\(disambiguation\)$/i.test(c.title) || (a && /\bmay (?:also )?refer to\b/i.test(a.lead.slice(0, 300)));
-      // A stub (intro under 200 characters -- "Worth", picked from "is
-      // montmartre worth visiting") is passed over when a fuller candidate
-      // follows; it's only used as a last resort.
-      let candidate = null, art = null, stub = null;
-      for (const c of candidates.filter((c) => !isDisambig(c)).slice(0, 4)) {
-        const a = await fetchOfflineArticle(c);
-        if (myToken !== urlContextToken) return;
-        if (isDisambig(c, a)) continue;
-        if (a.lead.length < 200 && !forcedCandidate) { stub = stub || { c, a }; continue; }
-        candidate = c; art = a; break;
-      }
-      if (!art && stub) { candidate = stub.c; art = stub.a; }
-      if (!art) throw new Error('only found disambiguation pages -- try being more specific');
-      candidates = candidates.filter((c) => c !== candidate && !isDisambig(c));
-      const label = art.title + ' (offline)';
+      const picked = await chooseOfflineArticle(backend, candidates, !!forcedCandidate);
+      if (myToken !== urlContextToken) return;
+      if (!picked) throw new Error('only found disambiguation pages -- try being more specific');
+      const { candidate, art } = picked;
+      candidates = picked.rest;
+      const label = art.title + ' (offline' + (zimDate(backend.name) ? ', ' + zimDate(backend.name) : '') + ')';
+      // offline: true keeps follow-ups on this answer offline too (see
+      // openArticle) -- the cite URL may point at wikipedia.org.
       pendingUrlContext = {
-        url: candidate.url, label, matchedText: trimmed, lang: /_(\w\w)_/.exec(book) ? /_(\w\w)_/.exec(book)[1] : 'en',
-        text: 'Wikipedia (offline copy, ' + book + '): ' + art.title + '\n' + art.lead + (art.facts.length ? '\n\nInfobox facts:\n' + art.facts.join('\n') : ''),
+        url: backend.citeUrl(candidate.path), label, matchedText: trimmed, lang: backend.lang, offline: true,
+        text: 'Wikipedia (offline copy, ' + backend.name + '): ' + art.title + '\n' + art.lead + (art.facts.length ? '\n\nInfobox facts:\n' + art.facts.join('\n') : ''),
       };
       urlContextNameEl.textContent = '💾 ' + label;
       if (!forcedCandidate) showWikiAlternatives(candidates.slice(0, 2), trimmed, cmd);
+    }
+
+    // Nothing to read from yet: offer the file picker (or Reconnect, for a
+    // remembered file awaiting permission) right in the chip. The click is
+    // the gesture the picker needs; afterwards the same command re-runs.
+    function offerOfflineConnect(trimmed, cmd, myToken) {
+      pendingUrlContext = null;
+      urlContextNameEl.textContent = offlineNeedsPermission ? 'Offline Wikipedia needs permission to read ' + offlineNeedsPermission.name : 'No offline Wikipedia connected';
+      urlContextAltsEl.innerHTML = '';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = offlineNeedsPermission ? 'Reconnect' : 'Choose .zim file…';
+      btn.addEventListener('click', async () => {
+        try {
+          await (offlineNeedsPermission ? reconnectOfflineFile() : pickOfflineFile());
+        } catch (e) {
+          if (e && e.name === 'AbortError') return; // picker dismissed
+          urlContextNameEl.textContent = "Couldn't open offline Wikipedia (" + e.message + ')';
+          return;
+        }
+        const p = resolveWikiSlashCommand(trimmed, cmd);
+        urlContextInFlightKey = trimmed;
+        urlContextInFlightPromise = p;
+      });
+      urlContextAltsEl.append(btn);
     }
 
     // The paired edition for gap-finding and comparison: English <-> French
@@ -2521,7 +2790,7 @@
     function openArticle(conv) {
       for (let i = conv.messages.length - 1; i >= 0; i--) {
         const m = conv.messages[i];
-        const art = m.role === 'user' && m.urlContext && articleFromUrl(m.urlContext.url);
+        const art = m.role === 'user' && m.urlContext && !m.urlContext.offline && articleFromUrl(m.urlContext.url);
         if (!art) continue;
         const seen = new Set();
         for (const mm of conv.messages) {
@@ -2799,7 +3068,7 @@
     }
     async function resolveWikiSlashCommand(trimmed, rawCmd, forcedCandidate) {
       const detected = detectLang(rawCmd.query);
-      const cmd = { ...rawCmd, lang: rawCmd.lang || (!navigator.onLine && (await offlineBook()) ? 'offline' : detected && WIKI_LANGS[detected] ? detected : 'en') };
+      const cmd = { ...rawCmd, lang: rawCmd.lang || (!navigator.onLine && (await getOfflineBackend()) ? 'offline' : detected && WIKI_LANGS[detected] ? detected : 'en') };
       const { lang, mode, query } = cmd;
       const myToken = ++urlContextToken;
       urlContextAltsEl.innerHTML = '';
@@ -3029,7 +3298,7 @@
       const isShown = () => activeThreadId === threadId;
       if (isShown()) chatSendBtn.disabled = true;
       const userMsg = { role: 'user', content: text };
-      if (urlContext) userMsg.urlContext = { url: urlContext.url, label: urlContext.label, text: urlContext.text, revision: urlContext.revision, timestamp: urlContext.timestamp, lang: urlContext.lang };
+      if (urlContext) userMsg.urlContext = { url: urlContext.url, label: urlContext.label, text: urlContext.text, revision: urlContext.revision, timestamp: urlContext.timestamp, lang: urlContext.lang, offline: urlContext.offline };
       let modelAttachment = null; // { type, file } actually sent to the model this turn
       if (attachment) {
         userMsg.attachmentType = attachment.type;
@@ -3239,6 +3508,7 @@
     chatInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
     });
+    initOfflineUi();
   </script>
 </body>
 </html>

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Resolve paths from the repo root, so the page's own new Worker('vendor/libzim/...') works from here. -->
+<base href="../">
+<title>Offline parity</title>
+<style>
+  :root { --bg: #fff; --fg: #1b1b1f; --muted: #666; --ok: #1a7f37; --bad: #c62828; --line: #ddd; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161618; --fg: #eee; --muted: #999; --ok: #4ac26b; --bad: #ff6b6b; --line: #333; } }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; padding: 16px; max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 1.2rem; margin-bottom: 0.5rem; }
+  p { color: var(--muted); margin-bottom: 0.75rem; }
+  .controls { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  #summary { margin-top: 0.75rem; font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Offline Wikipedia: local server vs in-page reader</h1>
+<p>Runs chrome-chat's own offline article selection (extracted from <code>index.html</code>, not copied) against both backends: the local <code>kiwix-serve</code> behind <code>offline/serve.py</code>, and Kiwix's reader running inside this page on the file you pick. Serve the repo with <code>python3 offline/serve.py</code>, open <code>/eval/offline-parity.html</code>, pick the same .zim that serve.py loaded, and press Run. Pass = both backends choose the same article.</p>
+<div class="controls"><input type="file" id="zim" accept=".zim"><button id="run" type="button">Run</button><span id="status"></span></div>
+<table><thead><tr><th>Question</th><th>Local server</th><th>In-page reader</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+<div id="summary"></div>
+<script type="module">
+const QUESTIONS = [
+  'edinburgh castle', 'when was edinburgh castle besieged', 'what is the economy of edinburgh based on',
+  'how tall is the eiffel tower', 'is montmartre worth visiting', 'who invented the telephone', 'grassmarket',
+  'when did world war ii end', 'mercury', 'what did alexander graham bell invent',
+  'how old is the university of edinburgh', 'what is the capital of scotland', 'who wrote harry potter', 'where is the grassmarket',
+];
+
+// Same extraction as eval/page.mjs: the shipped functions, cut out of index.html by stable markers.
+async function loadPageCode() {
+  const html = await (await fetch('index.html')).text();
+  const cut = (from, to) => {
+    let a = html.indexOf(from);
+    if (a < 0) throw new Error('marker not found: ' + from);
+    a = html.lastIndexOf('\n', a) + 1;
+    const b = html.indexOf(to, a + 5);
+    if (b < 0) throw new Error('marker not found: ' + to);
+    return html.slice(a, b);
+  };
+  const code = [
+    cut('const WIKIMEDIA_HEADERS', '    // Wikipedia text is CC'),
+    cut('    function wikiRevisionMeta', '    const URL_SOURCES'),
+    cut('    //\n    // /wiki full <topic>', '    async function resolveFollowupSections'),
+    cut('    function urlContextPreamble', '    function buildInitialPrompts'),
+  ].join('\n');
+  const prelude = 'const withTimeout = (p, ms) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error("timed out")), ms))]);\n'
+    + 'let throwawaySessionsInFlight = 0; let chatLangs = null; let urlContextToken = 0;\n';
+  const src = prelude + code + '\nexport { serverBackend, workerBackend, offlineCandidates, chooseOfflineArticle };';
+  return import(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+}
+
+async function pick(P, backend, q) {
+  const t0 = performance.now();
+  const candidates = await P.offlineCandidates(backend, q, 10);
+  const picked = candidates.length ? await P.chooseOfflineArticle(backend, candidates, false) : null;
+  return { title: picked ? picked.art.title : null, lead: picked ? picked.art.lead.length : 0, facts: picked ? picked.art.facts.length : 0, ms: Math.round(performance.now() - t0) };
+}
+
+window.runParity = async (file) => {
+  const status = document.getElementById('status');
+  const rows = document.getElementById('rows');
+  rows.innerHTML = '';
+  const P = await loadPageCode();
+  const server = await P.serverBackend();
+  if (!server) throw new Error('no local server backend -- open this page via offline/serve.py');
+  status.textContent = 'Opening ' + file.name + ' in the page…';
+  const t0 = performance.now();
+  const reader = P.workerBackend(file);
+  reader.articleCount = await reader.ready;
+  const openMs = Math.round(performance.now() - t0);
+  status.textContent = 'Opened in ' + openMs + ' ms (' + reader.articleCount.toLocaleString() + ' entries). Running…';
+  const results = [];
+  for (const q of QUESTIONS) {
+    const a = await pick(P, server, q);
+    const b = await pick(P, reader, q);
+    const same = a.title === b.title;
+    results.push({ q, server: a, reader: b, same });
+    const tr = document.createElement('tr');
+    const cell = (r) => (r.title || '—') + ' <small>(' + r.lead + ' chars, ' + r.facts + ' facts, ' + r.ms + ' ms)</small>';
+    tr.innerHTML = '<td></td><td>' + cell(a) + '</td><td>' + cell(b) + '</td><td class="' + (same ? 'ok">✓' : 'bad">✗') + '</td>';
+    tr.firstChild.textContent = q;
+    rows.append(tr);
+  }
+  const agree = results.filter((r) => r.same).length;
+  document.getElementById('summary').textContent = 'Same article: ' + agree + '/' + results.length + ' · in-page reader opened the file in ' + openMs + ' ms';
+  status.textContent = '';
+  reader.close();
+  return { openMs, entries: reader.articleCount, agree, total: results.length, results };
+};
+
+document.getElementById('run').addEventListener('click', async () => {
+  const file = document.getElementById('zim').files[0];
+  if (!file) { document.getElementById('status').textContent = 'Pick the .zim file first.'; return; }
+  try { await window.runParity(file); } catch (e) { document.getElementById('status').textContent = 'Error: ' + e.message; }
+});
+</script>
+</body>
+</html>
