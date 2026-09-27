@@ -22,6 +22,16 @@ export const BANK = [
   { id: 10, keyword: 'tram', q: 'In what year did Edinburgh Trams open to passengers?', answer: 2014, tol: 0, unit: 'year', source: W('Edinburgh Trams') },
   { id: 11, keyword: 'parliament', q: 'What was the estimated final cost of the Scottish Parliament Building, in millions of pounds?', answer: 414, tol: 1, unit: 'n', source: W('Scottish Parliament Building') },
   { id: 12, keyword: 'nevis', q: 'Roughly how many visitors does Ben Nevis attract each year?', answer: 150000, tol: 0, unit: 'n', source: W('Ben Nevis') },
+  // Batch 2 (added after batch 1's calibration, committed before running it):
+  // well-known facts a small model usually gets right. Batch 1 was almost
+  // always bluffed cold, which makes "don't trust" a free win; the tour needs
+  // both kinds so confidence alone can't tell them apart.
+  { id: 13, keyword: 'forth', q: 'In what year was the Forth Bridge opened?', answer: 1890, tol: 0, unit: 'year', source: W('Forth Bridge') },
+  { id: 14, keyword: 'nevis', q: 'How high is Ben Nevis, in metres?', answer: 1345, tol: 1, unit: 'm', source: W('Ben Nevis') },
+  { id: 15, keyword: 'tay', q: 'In what year did the Tay Bridge disaster happen?', answer: 1879, tol: 0, unit: 'year', source: W('Tay Bridge disaster') },
+  { id: 16, keyword: 'bobby', q: 'In what year did Greyfriars Bobby die?', answer: 1872, tol: 0, unit: 'year', source: W('Greyfriars Bobby') },
+  { id: 17, keyword: 'falkirk', q: 'In what year did the Falkirk Wheel open?', answer: 2002, tol: 0, unit: 'year', source: W('Falkirk Wheel') },
+  { id: 18, keyword: 'parliament', q: 'In what year was the Scottish Parliament Building formally opened?', answer: 2004, tol: 0, unit: 'year', source: W('Scottish Parliament Building') },
 ];
 
 // The trap: the article says nothing about this, so the honest answer is "the
