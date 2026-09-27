@@ -69,7 +69,41 @@ export const CASES = [
   { id: 45, held: true, code: false, q: 'Translate "thank you" into Spanish.', text: ['gracias'] },
   { id: 46, held: true, code: true, q: 'Sort these words alphabetically: pear, apple, mango.', compact: 'apple,mango,pear' },
   { id: 47, held: true, code: true, q: 'What is the average of 4, 9 and 20?', num: 11 },
+  // HELD-OUT 2 (2026-09-28 00:50): committed before the blind-spot fixes
+  // (percentages as fractions, clock times, sort/order in the gate, numbered
+  // lists in the scorer) -- aimed at them, plus a general mix. Run once per model.
+  { id: 48, held: 2, code: true, q: 'What is 7.5% of 240?', num: 18 },
+  { id: 49, held: 2, code: true, q: 'What is 35% of 60?', num: 21 },
+  { id: 50, held: 2, code: true, q: 'A £120 coat is reduced by 15%. What is the new price in pounds?', num: 102 },
+  { id: 51, held: 2, code: true, q: 'A meeting starts at 09:50 and lasts 1 hour 25 minutes. What time does it end?', text: ['11:15'] },
+  { id: 52, held: 2, code: true, q: 'A flight departs at 22:30 and takes 3 hours 45 minutes. What time does it land, in the same time zone?', text: ['02:15', '2:15'] },
+  { id: 53, held: 2, code: true, q: 'What time is it 4 hours 50 minutes after 11:20?', text: ['16:10', '4:10'] },
+  { id: 54, held: 2, code: true, q: 'Sort these words alphabetically: kiwi, banana, cherry.', compact: 'banana,cherry,kiwi' },
+  { id: 55, held: 2, code: true, q: 'Put these numbers in order from largest to smallest: 8, 23, 15, 4.', compact: '23,15,8,4' },
+  { id: 56, held: 2, code: true, q: 'Arrange these names alphabetically: Zoe, Adam, Mia.', compact: 'adam,mia,zoe' },
+  { id: 57, held: 2, code: true, q: 'How many times does the letter o appear in "chocolate"?', num: 2 },
+  { id: 58, held: 2, code: true, q: 'What is 918 × 64?', num: 58752 },
+  { id: 59, held: 2, code: true, q: 'What day of the week will 1 January 2030 be?', ...day('tuesday') },
+  { id: 60, held: 2, code: true, q: 'How many days are there between 14 February 2027 and 1 May 2027?', num: 76 },
+  { id: 61, held: 2, code: false, q: 'What is the capital of Japan?', text: ['tokyo'] },
+  { id: 62, held: 2, code: false, q: 'Who painted the Mona Lisa?', text: ['leonardo', 'da vinci'] },
+  // PROBE (2026-09-28 00:50): problem types not covered yet, to find what breaks
+  // next -- no claims, no tuning. 63's answer depends on the day it's run (the
+  // model has no clock); 64 needs remembered facts, then arithmetic, and has no
+  // digit (the gate won't offer code); 71 is ambiguous (3 April UK / 4 March US).
+  { id: 63, probe: true, code: true, q: 'How many days are there until Christmas Day this year?', numFn: () => { const n = new Date(), x = new Date(n.getFullYear(), 11, 25); return Math.round((x - new Date(n.getFullYear(), n.getMonth(), n.getDate())) / 864e5); } },
+  { id: 64, probe: true, code: true, q: 'How many years before the first Moon landing did the Titanic sink?', num: 57 },
+  { id: 65, probe: true, code: true, q: 'Convert 5 miles to kilometres, to 2 decimal places.', text: ['8.05'] },
+  { id: 66, probe: true, code: true, q: 'What is 100 degrees Fahrenheit in Celsius, to 1 decimal place?', text: ['37.8'] },
+  { id: 67, probe: true, code: true, q: 'If I invest £1,000 at 5% interest compounded annually, how much will I have after 3 years, in pounds?', text: ['1157.63', '1157.62', '1,157.63', '1,157.62'] },
+  { id: 68, probe: true, code: true, q: 'What is 3/8 plus 1/4, as a fraction?', text: ['5/8'] },
+  { id: 69, probe: true, code: true, q: 'What is -15 plus 8 times 3?', num: 9 },
+  { id: 70, probe: true, code: true, q: 'How many words are in this sentence: "The quick brown fox jumps over the lazy dog"?', num: 9 },
+  { id: 71, probe: true, code: true, q: 'If today is 3/4/2027, what date will it be in 10 days?', text: ['2027-04-13', '2027-03-14', '13 april 2027', '14 march 2027', 'april 13, 2027', 'march 14, 2027'] },
+  { id: 72, probe: true, code: true, q: 'What is 1,000,000 divided by 3, rounded to the nearest whole number?', num: 333333 },
+  { id: 73, probe: true, code: true, q: 'A recipe for 4 people uses 300 g of flour. How much flour is needed for 6 people, in grams?', num: 450 },
 ];
+for (const c of CASES) c.set = c.probe ? 'probe' : c.held === 2 ? 'held2' : c.held ? 'held' : 'tune';
 
 export const PROMPT_TOOLS = 'You are a helpful, concise assistant. You cannot see the individual letters of words, and you make arithmetic and date mistakes. '
   + 'So if a question needs counting, arithmetic or a date or time calculation, never work it out in your head: think briefly about what to compute, '
@@ -97,6 +131,7 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
 export function check(c, out) {
   // Small number words count too ("eight legs"). Fixed after the first run, which scored that as a miss.
   const s = String(out || '').toLowerCase().replace(/\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/g, (w) => ' ' + WORDS.indexOf(w) + ' ');
+  if (c.numFn) c = { ...c, num: c.numFn() };
   if (c.num != null) {
     const nums = (s.replace(/(\d),(?=\d{3})/g, '$1').match(/-?\d+(?:\.\d+)?/g) || []);
     if (typeof c.num === 'bigint') return nums.some((n) => /^\d+$/.test(n) && BigInt(n) === c.num);
