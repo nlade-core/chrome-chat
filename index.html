@@ -1979,9 +1979,7 @@
       // source-language title. Full-text asks for 10 rows (same request) so
       // the subject is in range: "is montmartre worth visiting" had
       // Montmartre outside the top 4.
-      const norm = (t) => ' ' + t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s*\(.*?\)/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim() + ' ';
-      const q = norm(query);
-      const inQuery = (c) => { const t = norm(c.via || c.title); return t.trim() && q.includes(t) ? 1 : 0; };
+      const inQuery = (c) => (titleInQuery(c.via || c.title, query) ? 1 : 0);
       const nExact = exact.length;
       const rest = merged.slice(nExact).map((c, i) => ({ c, i, w: inQuery(c) }))
         .sort((x, y) => (y.w - x.w) || (x.i - y.i)).map((x) => x.c);
@@ -2003,6 +2001,140 @@
       }
       return merged;
     }
+    const normTitle = (t) => ' ' + t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s*\(.*?\)/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim() + ' ';
+    function titleInQuery(title, query) {
+      const t = normTitle(title);
+      return !!t.trim() && normTitle(query).includes(t);
+    }
+
+    // /wiki:offline <question> -- the same pipeline against a local copy of
+    // Wikipedia: a Kiwix ZIM file served by kiwix-serve, proxied under
+    // /kiwix/ on the SAME origin as this page by offline/serve.py. Only
+    // exists when the page is served that way (/kiwix/book answers with the
+    // loaded ZIM's name). With the model on-device and Wikipedia on disk, a
+    // whole question-and-answer round trip touches nothing but localhost.
+    // Plain /wiki falls back to it automatically when the browser is offline.
+    // A "mini" ZIM holds lead sections + infoboxes only, so offline answers
+    // work from the intro and the infobox facts; follow-ups can't go deeper.
+    let offlineBookPromise = null;
+    function offlineBook() {
+      if (!offlineBookPromise) offlineBookPromise = fetch('/kiwix/book').then((r) => (r.ok ? r.text() : null)).catch(() => null);
+      return offlineBookPromise;
+    }
+    async function offlineCandidates(book, query, limit) {
+      const enc = encodeURIComponent;
+      const suggest = (term) => fetch('/kiwix/suggest?content=' + enc(book) + '&term=' + enc(term) + '&count=5').then((r) => r.json()).catch(() => []);
+      const [sug, xml] = await Promise.all([
+        suggest(query),
+        fetch('/kiwix/search?books.name=' + enc(book) + '&pattern=' + enc(query) + '&format=xml&pageLength=' + limit).then((r) => r.text()).catch(() => ''),
+      ]);
+      const asCandidate = (title, link) => ({ title, url: location.origin + link, offline: true });
+      const isArticle = (c) => c.title !== 'Main Page';
+      // Exact title first (the offline twin of gsrwhat=nearmatch): a
+      // suggestion whose title IS the query.
+      const exact = sug.filter((x) => x.kind === 'path' && normTitle(x.value) === normTitle(query))
+        .map((x) => asCandidate(x.value, '/kiwix/content/' + book + '/' + x.path));
+      const items = [...new DOMParser().parseFromString(xml, 'text/xml').querySelectorAll('item')]
+        .map((it) => asCandidate(it.querySelector('title').textContent, it.querySelector('link').textContent));
+      // Same subject-first rule as online: a result whose title appears in
+      // the question outranks one that merely matches its words.
+      items.sort((a, b) => Number(titleInQuery(b.title, query)) - Number(titleInQuery(a.title, query)));
+      // Offline full-text is weaker than Wikipedia's own search (the
+      // question's filler words drown the subject: "how tall is the eiffel
+      // tower" found only "Eiffel", "when did world war ii end" nothing
+      // useful -- confirmed against the full English mini ZIM). So every
+      // run of 1-4 words from the question that doesn't start or end on a
+      // function word is tried as an exact title -- local lookups, a few
+      // ms each -- and the longest one that exists wins: "eiffel tower",
+      // "world war ii", "edinburgh castle" over "edinburgh".
+      let spans = [];
+      if (!exact.length) {
+        const toks = query.toLowerCase().split(/[^\p{L}\p{N}']+/u).filter(Boolean);
+        const filler = new Set((FUNCTION_WORDS.en + ' ' + WIKI_LANGS.en.stopwords + ' tall long old big far much').split(' '));
+        const tried = [];
+        for (let n = Math.min(4, toks.length); n >= 1; n--) {
+          for (let i = 0; i + n <= toks.length; i++) {
+            const span = toks.slice(i, i + n);
+            if (filler.has(span[0]) || filler.has(span[n - 1]) || (n === 1 && span[0].length < 4)) continue;
+            tried.push(span.join(' '));
+          }
+        }
+        const found = await Promise.all(tried.slice(0, 12).map(async (t) => (await suggest(t)).find((x) => x.kind === 'path' && normTitle(x.value) === normTitle(t))));
+        // Ties (same length): prefer a title full-text search also returned,
+        // then the one later in the question -- English questions tend to
+        // put the subject last ("who invented the telephone" -> Telephone,
+        // not Invention).
+        const inItems = new Set(items.map((c) => normTitle(c.title)));
+        const pos = (t) => normTitle(query).indexOf(normTitle(t));
+        spans = found.map((x, k) => x && { x, words: tried[k].split(' ').length, hit: inItems.has(normTitle(x.value)), at: pos(tried[k]) }).filter(Boolean)
+          .sort((a, b) => (b.words - a.words) || (Number(b.hit) - Number(a.hit)) || (b.at - a.at))
+          .map(({ x }) => asCandidate(x.value, '/kiwix/content/' + book + '/' + x.path));
+      }
+      let out = [...exact, ...spans, ...items];
+      const seen = new Set();
+      return out.filter((c) => isArticle(c) && !seen.has(c.url) && seen.add(c.url));
+    }
+    // Intro paragraphs (up to the first h2, so a full ZIM works too) plus
+    // the infobox as "label: value" facts -- the mini ZIM's two assets.
+    async function fetchOfflineArticle(candidate) {
+      const res = await fetch(candidate.url);
+      if (!res.ok) throw new Error('offline copy returned HTTP ' + res.status);
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      // Hidden machine-readable copies (e.g. an ISO date in a display:none
+      // span next to the visible one) would otherwise be glued into the
+      // text, and <br>-separated infobox values ran together
+      // ("…Jr.(1889-04-16)16 April 1889London, England").
+      doc.querySelectorAll('style, script, sup, .mw-editsection, .navbox, .hatnote, .mw-empty-elt, .reflist, .noprint, [style*="display:none"], [style*="display: none"]').forEach((n) => n.remove());
+      doc.querySelectorAll('br').forEach((n) => n.replaceWith(', '));
+      doc.querySelectorAll('li').forEach((n) => n.append('; '));
+      const clean = (n) => n.textContent.replace(/\s+/g, ' ').trim();
+      const infobox = doc.querySelector('table.infobox');
+      const facts = infobox ? [...infobox.querySelectorAll('tr')].map((tr) => {
+        const th = tr.querySelector('th'), td = tr.querySelector('td');
+        return th && td && clean(th) && clean(td) ? clean(th) + ': ' + clean(td) : null;
+      }).filter(Boolean).slice(0, 25) : [];
+      if (infobox) infobox.remove();
+      const paras = [];
+      for (const n of doc.body.querySelectorAll('p, h2')) {
+        if (n.tagName === 'H2') break;
+        const t = clean(n);
+        if (t.length > 40) paras.push(t);
+      }
+      return { title: clean(doc.querySelector('title') || { textContent: candidate.title }) || candidate.title, lead: cutAtBoundary(paras.join('\n\n'), 3000), facts };
+    }
+    async function resolveOfflineCommand(trimmed, cmd, forcedCandidate, myToken) {
+      const book = await offlineBook();
+      if (!book) throw new Error('no offline Wikipedia on this page -- run chrome-chat via offline/serve.py');
+      urlContextNameEl.textContent = 'Searching offline Wikipedia for "' + cmd.query + '"…';
+      let candidates = forcedCandidate ? [forcedCandidate] : await offlineCandidates(book, cmd.query, 10);
+      if (myToken !== urlContextToken) return;
+      if (!candidates.length) throw new Error('nothing in the offline copy matches that');
+      // Disambiguation pages have no page-prop marker in a ZIM; the title
+      // suffix and the "may refer to" opening are the reliable tells.
+      const isDisambig = (c, a) => /\(disambiguation\)$/i.test(c.title) || (a && /\bmay (?:also )?refer to\b/i.test(a.lead.slice(0, 300)));
+      // A stub (intro under 200 characters -- "Worth", picked from "is
+      // montmartre worth visiting") is passed over when a fuller candidate
+      // follows; it's only used as a last resort.
+      let candidate = null, art = null, stub = null;
+      for (const c of candidates.filter((c) => !isDisambig(c)).slice(0, 4)) {
+        const a = await fetchOfflineArticle(c);
+        if (myToken !== urlContextToken) return;
+        if (isDisambig(c, a)) continue;
+        if (a.lead.length < 200 && !forcedCandidate) { stub = stub || { c, a }; continue; }
+        candidate = c; art = a; break;
+      }
+      if (!art && stub) { candidate = stub.c; art = stub.a; }
+      if (!art) throw new Error('only found disambiguation pages -- try being more specific');
+      candidates = candidates.filter((c) => c !== candidate && !isDisambig(c));
+      const label = art.title + ' (offline)';
+      pendingUrlContext = {
+        url: candidate.url, label, matchedText: trimmed, lang: /_(\w\w)_/.exec(book) ? /_(\w\w)_/.exec(book)[1] : 'en',
+        text: 'Wikipedia (offline copy, ' + book + '): ' + art.title + '\n' + art.lead + (art.facts.length ? '\n\nInfobox facts:\n' + art.facts.join('\n') : ''),
+      };
+      urlContextNameEl.textContent = '💾 ' + label;
+      if (!forcedCandidate) showWikiAlternatives(candidates.slice(0, 2), trimmed, cmd);
+    }
+
     // The paired edition for gap-finding and comparison: English <-> French
     // for now, every other enabled language pairs with English.
     const otherEdition = (lang) => (lang === 'en' ? 'fr' : 'en');
@@ -2667,11 +2799,24 @@
     }
     async function resolveWikiSlashCommand(trimmed, rawCmd, forcedCandidate) {
       const detected = detectLang(rawCmd.query);
-      const cmd = { ...rawCmd, lang: rawCmd.lang || (detected && WIKI_LANGS[detected] ? detected : 'en') };
+      const cmd = { ...rawCmd, lang: rawCmd.lang || (!navigator.onLine && (await offlineBook()) ? 'offline' : detected && WIKI_LANGS[detected] ? detected : 'en') };
       const { lang, mode, query } = cmd;
       const myToken = ++urlContextToken;
       urlContextAltsEl.innerHTML = '';
       urlContextChip.style.display = 'flex';
+      if (lang === 'offline') {
+        try {
+          await resolveOfflineCommand(trimmed, cmd, forcedCandidate, myToken);
+        } catch (e) {
+          if (myToken !== urlContextToken) return;
+          pendingUrlContext = null;
+          urlContextNameEl.textContent = "Couldn't answer from offline Wikipedia (" + (e.message || 'error') + ')';
+          setTimeout(() => { if (myToken === urlContextToken) clearUrlContext(); }, 4000);
+        } finally {
+          if (urlContextInFlightKey === trimmed) { urlContextInFlightKey = null; urlContextInFlightPromise = null; }
+        }
+        return;
+      }
       urlContextNameEl.textContent = 'Searching ' + (lang !== 'en' ? languageName(lang) + ' ' : '') + 'Wikipedia for "' + query + '"…';
       try {
         if (!WIKI_LANGS[lang]) throw new Error('/wiki:' + lang + " isn't supported yet -- " + Object.keys(WIKI_LANGS).map((l) => '/wiki:' + l).join(', ') + ' so far');
