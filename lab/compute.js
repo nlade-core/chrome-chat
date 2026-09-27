@@ -170,7 +170,7 @@ function showDetail(c) {
   r.plain.forEach((x, i) => box.append(h('h4', 'Plain, run ' + (i + 1) + ' — ' + (x.pass ? 'pass' : 'fail')), h('pre', x.reply)));
 }
 function totals() {
-  const all = [...results.entries()].map(([id, r]) => ({ c: CASES.find((x) => x.id === id), ...r }));
+  const all = [...results.entries()].map(([id, r]) => ({ c: CASES.find((x) => x.id === id), ...r })).filter((x) => inSet().includes(x.c));
   const sum = (sel, f) => { let a = 0, b = 0; for (const x of all.filter((y) => sel(y.c))) for (const r of x.tools) { b++; if (f(r)) a++; } return a + '/' + b; };
   const sumP = (sel) => { let a = 0, b = 0; for (const x of all.filter((y) => sel(y.c))) for (const r of x.plain) { b++; if (r.pass) a++; } return a + '/' + b; };
   return {
@@ -222,7 +222,7 @@ async function runCases(list, resume = false) {
 function report() {
   const t = totals();
   const lines = ['compute-lab results · ' + new Date().toISOString().slice(0, 16) + ' · ' + (navigator.userAgentData ? navigator.userAgentData.brands.map((b) => b.brand + ' ' + b.version).join(', ') : navigator.userAgent),
-    'Mode: ' + ($('typed').checked ? 'TYPED' : 'plain code') + ' · tool prompt: ' + ($('strict').checked ? 'strict' : 'lenient') + ' · nudge: ' + ($('nudge').checked ? 'on' : 'off') + ' · runs each: ' + $('runs').value + ' · Python ' + (pyInfo ? pyInfo.version + ', loaded in ' + pyInfo.ms + ' ms' : 'not loaded') + ' · requests after Python loaded: ' + netCount(),
+    'Mode: ' + ($('typed').checked ? 'TYPED' : 'plain code') + ' · tool prompt: ' + ($('strict').checked ? 'strict' : 'lenient') + ' · nudge: ' + ($('nudge').checked ? 'on' : 'off') + ' · runs each: ' + $('runs').value + ' · question set: ' + $('set').value + ' · Python ' + (pyInfo ? pyInfo.version + ', loaded in ' + pyInfo.ms + ' ms' : 'not loaded') + ' · requests after Python loaded: ' + netCount(),
     'TOTALS ' + JSON.stringify(t), '',
     'id | kind | with tools pass | used code | repaired | plain pass | model ms | first output'];
   for (const c of CASES) {
@@ -252,8 +252,9 @@ for (const c of CASES) {
   const o = h('option', '#' + c.id + ' ' + c.q); o.value = c.id; $('pick').append(o);
   renderRow(c);
 }
-$('run-all').onclick = () => runCases(CASES);
-$('resume').onclick = () => runCases(CASES, true);
+const inSet = () => CASES.filter((c) => $('set').value === 'all' || ($('set').value === 'held') === !!c.held);
+$('run-all').onclick = () => runCases(inSet());
+$('resume').onclick = () => runCases(inSet(), true);
 $('run-one').onclick = () => runCases(CASES.filter((c) => c.id === Number($('pick').value)));
 $('stop').onclick = () => { stop = true; };
 $('copy').onclick = async (e) => { try { await navigator.clipboard.writeText(report()); e.target.textContent = 'Copied'; setTimeout(() => (e.target.textContent = 'Copy results'), 1500); } catch { $('report').hidden = false; $('report').value = report(); } };

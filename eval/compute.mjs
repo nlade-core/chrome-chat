@@ -1,4 +1,4 @@
-// Usage: node eval/compute.mjs [--model gemma4:e4b] [--runs 3] [--no-plain] [--strict] [--nudge] [--typed]
+// Usage: node eval/compute.mjs [--model gemma4:e4b] [--runs 3] [--no-plain] [--strict] [--nudge] [--typed] [--set tune|held|all]
 //
 // The compute lab (lab/compute.html) with local stand-ins: Ollama for Gemini
 // Nano (temperature 1, topK 3, hidden reasoning off) and local python3 for
@@ -16,6 +16,8 @@ const doPlain = !process.argv.includes('--no-plain');
 const TOOLS = process.argv.includes('--strict') ? PROMPT_TOOLS_STRICT : PROMPT_TOOLS;
 const doNudge = process.argv.includes('--nudge');
 const typed = process.argv.includes('--typed');
+const set = arg('set', 'tune'); // tune | held | all
+const SET = CASES.filter((c) => set === 'all' || (set === 'held') === !!c.held);
 
 function runPython(code) {
   try { return { ok: true, out: execFileSync('python3', ['-I', '-c', code], { timeout: 10000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim() }; }
@@ -52,9 +54,9 @@ async function withTools(q) {
   return r;
 }
 
-console.log('model stand-in:', model, '| mode:', typed ? 'TYPED' : 'plain code', '| tool prompt:', TOOLS === PROMPT_TOOLS ? 'lenient' : 'strict', '| nudge:', doNudge ? 'on' : 'off', '| runs per case:', runs, '| baseline:', doPlain ? 'on' : 'off', '\n');
+console.log('model stand-in:', model, '| mode:', typed ? 'TYPED' : 'plain code', '| tool prompt:', TOOLS === PROMPT_TOOLS ? 'lenient' : 'strict', '| nudge:', doNudge ? 'on' : 'off', '| set:', set, '| runs per case:', runs, '| baseline:', doPlain ? 'on' : 'off', '\n');
 const T = { cT: 0, cP: 0, cN: 0, used: 0, dT: 0, dP: 0, dN: 0, falseTrig: 0, rep: 0 };
-for (const c of CASES) {
+for (const c of SET) {
   let pass = 0, used = 0, rep = 0, plainPass = 0; const outs = [];
   for (let i = 0; i < runs; i++) {
     const r = await withTools(c.q);

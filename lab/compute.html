@@ -33,7 +33,8 @@
 
   <h2>Run the test set</h2>
   <div class="bar">
-    <button class="primary" id="run-all">Run all 29</button>
+    <label>questions <select id="set"><option value="tune">tuning set (1–29)</option><option value="held">held-out (30–47)</option><option value="all">all 47</option></select></label>
+    <button class="primary" id="run-all">Run set</button>
     <button id="resume" title="Carry on: only the runs each question is still missing">Resume</button>
     <select id="pick"></select><button id="run-one">Run this one</button>
     <label>runs each <select id="runs"><option>1</option><option selected>3</option><option>5</option></select></label>

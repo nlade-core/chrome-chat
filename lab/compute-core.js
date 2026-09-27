@@ -202,8 +202,11 @@ elif _T == "time":
         _bad("this question needs a time as HH:MM")
     _out = "%02d:%s" % (int(_m.group(1)), _m.group(2))
 elif _T == "yesno":
-    if isinstance(_r, str) and _r.strip().lower().rstrip(".") in ("yes", "no", "true", "false"):
-        _r = _r.strip().lower().rstrip(".") in ("yes", "true")
+    _s = _r.strip().lower().rstrip(".") if isinstance(_r, str) else None
+    if _s in ("yes", "no", "true", "false"):
+        _r = _s in ("yes", "true")
+    elif _s is not None and (_s.startswith("no") or _s.startswith("not ")):
+        _r = False  # "not a leap year" (a Nano run returned exactly this)
     if not isinstance(_r, bool):
         _bad("this question needs yes or no (return True or False)")
     _out = "yes" if _r else "no"
@@ -221,6 +224,15 @@ else:
 print("__ANSWER__=" + _out)
 `;
 
+// Harness tidying before a run (added after the second typed Nano run): strip
+// indentation common to every line (" ANSWER_TYPE = ..." -> IndentationError)
+// and pre-import the modules it kept using without importing (datetime x3).
+export function tidyCode(code) {
+  const lines = code.replace(/\t/g, '    ').split('\n');
+  const ind = Math.min(...lines.filter((l) => l.trim()).map((l) => l.match(/^ */)[0].length));
+  return 'import datetime, math, calendar\n' + lines.map((l) => l.slice(Math.min(ind, l.match(/^ */)[0].length))).join('\n');
+}
+
 // The whole typed pipeline, shared by the page and the stand-in runner.
 // io: { first(system, q) -> reply, again(text) -> reply (same conversation), py(code) -> { ok, out, err } }
 export async function typedAnswer(q, io) {
@@ -237,23 +249,25 @@ export async function typedAnswer(q, io) {
     r.code = extractPython(more);
   }
   if (!r.code) { r.final = r.reply; return r; }
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const TRIES = 3; // first try + 2 retries (was 1 retry: the values check often used it up before the real error showed)
+  for (let attempt = 0; attempt < TRIES; attempt++) {
     r.declared = declaredType(r.code);
     r.type = r.inferred || 'auto';
     r.typeMismatch = !!(r.inferred && r.declared && r.inferred !== r.declared);
     const missing = missingInputs(q, r.code);
     let problem = null;
     if (!/def\s+answer\s*\(/.test(r.code)) problem = 'define def answer(): that returns the final value';
-    else if (missing.length) problem = 'your code does not use ' + missing.join(', ') + ' from the question -- include ' + (missing.length > 1 ? 'them' : 'it') + ' in the code and compute the answer from ' + (missing.length > 1 ? 'them' : 'it') + '; do not write the answer yourself';
+    else if (missing.length) problem = 'your code does not use ' + missing.join(', ') + ' from the question -- include ' + (missing.length > 1 ? 'them' : 'it') + ' in the code and compute the answer from ' + (missing.length > 1 ? 'them' : 'it') + '; do not write the answer yourself'
+      + (missing.some((m) => m.startsWith('"')) ? ' (work on the string itself in Python: slicing, len(), .count())' : '');
     else {
-      const run = await io.py(r.code + '\n' + pyWrapper(r.type));
+      const run = await io.py(tidyCode(r.code) + '\n' + pyWrapper(r.type));
       const m = run.ok && /__ANSWER__=(.*)$/m.exec(run.out);
       if (m) { r.out = r.final = m[1].trim(); r.checks = attempt ? 'passed on retry' : 'passed'; return r; }
       // The reason is on the "TypeError: ANSWER CHECK: ..." line -- not the traceback's copy of the raise statement.
       problem = run.ok ? 'answer() produced no value' : ((/TypeError: ANSWER CHECK: (.*)/.exec(run.err) || [])[1] || 'it failed with: ' + run.err);
     }
     r.problems.push(problem);
-    if (attempt === 1) break;
+    if (attempt === TRIES - 1) break;
     r.repaired = true;
     const fix = await io.again('Your code was rejected: ' + problem + '. Reply with only a corrected ```python code block (ANSWER_TYPE and def answer()).');
     const c2 = extractPython(fix);
