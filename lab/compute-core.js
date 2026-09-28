@@ -133,8 +133,14 @@ export const CASES = [
   { id: 92, messy: true, code: false, q: 'capital of frnace?', text: ['paris'] },
   { id: 93, messy: true, code: true, q: 'three hundred and twelve divided by eight', num: 39 },
   { id: 94, messy: true, code: false, q: 'who rote hamlet', text: ['shakespeare'] },
+  // STEPS (2026-09-28, committed before the multi-step loop exists): questions
+  // where a later step depends on an earlier result. One program can do each of
+  // them; whether the model chooses to look at an intermediate result is the finding.
+  { id: 95, steps: true, code: true, q: 'Milk costs £1.80 for 2 litres or £2.55 for 3 litres. At the cheaper price per litre, how much would 12 litres cost, in pounds?', num: 10.2 },
+  { id: 96, steps: true, code: true, q: 'Plan A costs £12 a month plus 5p per text. Plan B costs £17 a month with unlimited texts. I send 150 texts a month. Which plan is cheaper, and by how much per year, in pounds?', all: [['plan b', 'b is cheaper', 'plan_b', "'b'", '"b"', 'b:'], ['30']] },
+  { id: 97, steps: true, code: true, q: 'Starting from 1 January 2027, a payment is due every 45 days. On what date is the fourth payment due, and what day of the week is it?', all: [['2027-06-30', '30 june 2027', 'june 30, 2027'], ['wednesday']] },
 ];
-for (const c of CASES) c.set = c.messy ? 'messy' : c.words ? 'words' : c.probe ? 'probe' : c.held === 2 ? 'held2' : c.held ? 'held' : 'tune';
+for (const c of CASES) c.set = c.steps ? 'steps' : c.messy ? 'messy' : c.words ? 'words' : c.probe ? 'probe' : c.held === 2 ? 'held2' : c.held ? 'held' : 'tune';
 
 export const PROMPT_TOOLS = 'You are a helpful, concise assistant. You cannot see the individual letters of words, and you make arithmetic and date mistakes. '
   + 'So if a question needs counting, arithmetic or a date or time calculation, never work it out in your head: think briefly about what to compute, '
