@@ -17,7 +17,7 @@ export const matchesWeather = (text) => WEATHER.test(text) && !/\bunder the weat
 // words, or lowercase up to a time word / punctuation). Day: today by default.
 export function parseWeather(text) {
   let place = null;
-  const cap = /\b(?:in|at|for|near|around)\s+([A-Z][\p{L}'’.-]*(?:[\s-]+(?:[A-Z][\p{L}'’.-]*|upon|on|de|la|le|am|sur|en))*)/u.exec(text);
+  const cap = /\b(?:in|at|for|near|around)\s+([A-Z][\p{L}'’.-]*(?:[\s-]+(?:[A-Z][\p{L}'’.-]*|upon|on|de|la|le|am|sur|en))*(?:,\s*[A-Z][\p{L}'’.-]*(?:\s+[A-Z][\p{L}'’.-]*)*)?)/u.exec(text);
   if (cap) place = cap[1].trim().replace(new RegExp('\\s+(?:on\\s+|this\\s+|next\\s+)?(?:' + DAYS.join('|') + '|weekend|week)\\b.*$', 'i'), ''); // "Stoke-on-Trent on Friday" -> Stoke-on-Trent
   else {
     const low = /\b(?:in|at|for|near)\s+([a-z][a-z'’ -]{1,30}?)(?=\s+(?:today|tomorrow|tonight|this|on|next|at|now|over)\b|[?.!,]|$)/i.exec(text);
@@ -37,17 +37,48 @@ export function parseWeather(text) {
 const fmtT = (c, f) => (f ? Math.round(c * 9 / 5 + 32) + '°F' : Math.round(c) + '°C');
 const dayName = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
 
-export async function runWeather(text, home, fetchFn = fetch) {
+export async function runWeather(text, home, fetchFn = fetch, { pick = null, ask = true } = {}) {
   const q = parseWeather(text);
   const assumptions = [];
   let name = q.place;
-  if (!name) {
+  if (!name && !pick) {
+    // No place and nothing saved: ask once, offering the time-zone guess first -- and remember the answer.
+    if (ask && home.placeSource !== 'your saved location') {
+      return { clarify: { question: 'Weather for where?', options: [
+        ...(home.place ? [{ label: home.place + ' (from your time zone) — and remember it', text: text.replace(/\?*\s*$/, '') + ' in ' + home.place + '?', save: { place: home.place } }] : []),
+        { label: 'Somewhere else…', other: 'Weather in ' },
+      ] } };
+    }
     if (!home.place) return { error: 'Which place? Say "weather in <town>", or set your location in About.' };
-    name = home.place; assumptions.push('Weather for ' + name + ' — from ' + home.placeSource + '. Say "weather in <town>" or set your location in About to change it.');
+    name = home.place; assumptions.push('Weather for ' + name + ' — from ' + home.placeSource + '.');
   }
-  const geo = await (await fetchFn('https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json&name=' + encodeURIComponent(name))).json();
-  const g = geo.results && geo.results[0];
-  if (!g) return { error: 'Couldn’t find a place called "' + name + '".' };
+  let g = pick;
+  if (!g) {
+    // "Perth, Scotland" / "Perth Australia": search the name, keep matches for the qualifier.
+    const [nm, qual] = name.split(/\s*,\s*/);
+    const geo = await (await fetchFn('https://geocoding-api.open-meteo.com/v1/search?count=10&language=en&format=json&name=' + encodeURIComponent(nm))).json();
+    let rs = geo.results || [];
+    if (qual) { const Q = qual.toLowerCase(); const f = rs.filter((r) => [r.country, r.admin1, r.country_code].some((x) => x && x.toLowerCase() === Q)); if (f.length) rs = f; }
+    if (!rs.length) return { error: 'Couldn’t find a place called "' + name + '".' };
+    const same = rs.filter((r) => r.name.toLowerCase() === nm.toLowerCase());
+    // A same-name place in your country wins -- if it's a real town, not Perth, North Dakota (population 9).
+    const pop = (r) => r.population || 0;
+    const mine = !qual && home.region ? same.filter((r) => r.country_code === home.region && (pop(r) >= 20000 || pop(r) * 20 >= pop(same[0]))) : [];
+    if (mine.length) {
+      g = mine[0];
+      if (rs[0].country_code !== home.region) assumptions.push(g.name + ' in ' + g.country + ' — the one in your country; say "' + g.name + ', ' + rs[0].country + '" for the other.');
+    } else if (!qual && ask && same.length > 1) {
+      // Same name in different countries, both sizeable, neither yours: ask.
+      const byCountry = []; for (const r of same) if (!byCountry.some((x) => x.country_code === r.country_code)) byCountry.push(r);
+      const [a, b] = byCountry;
+      if (b && (a.population || 0) >= 50000 && (b.population || 0) >= 50000 && (b.population || 0) * 10 >= (a.population || 0)) {
+        return { clarify: { question: 'Which ' + a.name + '?', options: byCountry.slice(0, 3).map((r) => ({
+          label: [r.name, r.admin1, r.country].filter((x, i, arr) => x && arr.indexOf(x) === i).join(', '), text,
+          pick: { name: r.name, admin1: r.admin1, country: r.country, latitude: r.latitude, longitude: r.longitude } })) } };
+      }
+      g = rs[0];
+    } else g = rs[0];
+  }
   const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + g.latitude + '&longitude=' + g.longitude
     + '&current=temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m'
     + '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum'

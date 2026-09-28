@@ -225,6 +225,9 @@
   .compute-box summary { cursor: pointer; color: var(--muted); }
   .compute-box pre { white-space: pre-wrap; overflow-wrap: anywhere; background: color-mix(in srgb, var(--fg) 6%, transparent); border-radius: 6px; padding: 0.5rem; margin: 0.3rem 0; font-size: 0.8rem; }
   .compute-box .compute-meta { color: var(--muted); margin-top: 0.25rem; }
+  .clarify-box { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.5rem; }
+  .clarify-box .icon-btn { border: 1px solid var(--accent); color: var(--fg); }
+  .clarify-box .icon-btn:disabled { opacity: 0.45; cursor: default; }
   .home-settings { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; align-items: center; }
   .home-settings input, .home-settings select { font: inherit; padding: 0.2rem 0.4rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
   .msg-actions { margin-top: 0.5rem; display: flex; gap: 0.4rem; }
@@ -346,7 +349,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · <a href="?tour" id="tour-link">Take the tour</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 13:30 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 14:40 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -423,7 +426,7 @@
     // the runtime itself -- Python worker, model calls -- loads only when first needed.
     import { looksComputable, normaliseQuestion, todayText } from './lab/compute-core.js';
     // Live-data tools (weather, currency): plain code picks at most one, answers are written from the data.
-    import { pickTool, runTool } from './tools/index.js';
+    import { pickTool, runTool, detectClarify, applyDatePref, savePrefs } from './tools/index.js';
     import { homeContext, loadHome, saveHome } from './tools/context.js';
 
     const statusPill = document.getElementById('status-pill');
@@ -924,7 +927,7 @@
         } else {
           const isLastAndStreaming = isStreaming && i === lastIndex;
           let actions = '';
-          if (!isLastAndStreaming) {
+          if (!isLastAndStreaming && !m.clarify) {
             actions = '<div class="msg-actions"><button class="icon-btn copy-btn" data-i="' + i + '">Copy</button>';
             if (i === lastIndex && !isStreaming) {
               actions += '<button class="icon-btn regen-btn" data-i="' + i + '">Regenerate</button>';
@@ -944,7 +947,7 @@
                 sessionPart +
               '</div>'
             : '';
-          row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + computeHtml(m) + toolHtml(m) + timingHtml + actions + '</div>';
+          row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + computeHtml(m) + toolHtml(m) + clarifyHtml(m, i, i === lastIndex && !isStreaming) + timingHtml + actions + '</div>';
         }
         chatLog.appendChild(row);
       });
@@ -972,6 +975,8 @@
       scrollBottomBtn.style.display = 'none';
     });
     chatLog.addEventListener('click', async (e) => {
+      const clarifyBtn = e.target.closest('.clarify-btn');
+      if (clarifyBtn && !clarifyBtn.disabled) { await answerClarify(Number(clarifyBtn.dataset.i), Number(clarifyBtn.dataset.o)); return; }
       const copyBtn = e.target.closest('.copy-btn');
       if (copyBtn) {
         const i = Number(copyBtn.dataset.i);
@@ -3445,7 +3450,7 @@
       if (conv && conv.messages.length && REFERS_BACK.test(text)) return false;
       return true;
     }
-    async function sendCompute(text) {
+    async function sendCompute(text, { note = null } = {}) {
       let threadId = activeThreadId;
       if (threadId === null) {
         threadId = crypto.randomUUID();
@@ -3476,7 +3481,7 @@
       if (r && r.out != null) {
         msg.content = r.writeup || ('The answer is ' + r.out + '.');
         Object.assign(c, { result: r.out, code: r.code, steps: r.steps || [], repaired: !!r.repaired, normalised: r.normalised || null,
-          assumptions: r.assumptions || [], writeupChecked: !!r.writeup, writeupProblem: r.writeupProblem || null });
+          assumptions: [...(note ? [note] : []), ...(r.assumptions || [])], writeupChecked: !!r.writeup, writeupProblem: r.writeupProblem || null });
       } else if (r && r.gated) {
         msg.content = r.reply; delete msg.compute;
       } else {
@@ -3518,7 +3523,7 @@
       const last = conv && conv.messages[conv.messages.length - 1];
       return last && last.role === 'assistant' && last.tool && last.tool.ctx ? last.tool.ctx : null;
     }
-    async function sendTool(text, pick) {
+    async function sendTool(text, pick, { note = null, pick: place = null } = {}) {
       let threadId = activeThreadId;
       if (threadId === null) {
         threadId = crypto.randomUUID();
@@ -3535,12 +3540,17 @@
       if (isShown()) { chatSendBtn.disabled = true; stickToBottom = true; chatNote.textContent = msg.tool.stage; renderChat(); }
       renderThreadList();
       const startedAt = performance.now();
-      const r = await runTool(pick);
+      const r = await runTool(pick, undefined, place ? { pick: place } : {});
       delete msg.tool.stage;
+      if (r.clarify) { // e.g. "Which Birmingham?" -- turn this reply into the question
+        conv.messages.pop(); conv.streaming = false;
+        await sendClarify(text, r.clarify, { reuseUser: true });
+        return;
+      }
       if (r.error) { msg.content = r.error; msg.tool.error = true; }
       else {
         msg.content = r.answer;
-        Object.assign(msg.tool, { source: r.source, sourceUrl: r.sourceUrl, assumptions: r.assumptions || [],
+        Object.assign(msg.tool, { source: r.source, sourceUrl: r.sourceUrl, assumptions: [...(note ? [note] : []), ...(r.assumptions || [])],
           ctx: r.kind === 'weather' ? { kind: 'weather', place: r.place } : { kind: 'currency', from: r.from, amount: r.amount } });
       }
       msg.timingMs = { total: Math.round(performance.now() - startedAt) };
@@ -3551,6 +3561,59 @@
       renderThreadList();
       if (conv.messages.length === 2) maybeGenerateTitle(threadId, text);
       document.dispatchEvent(new CustomEvent('chat:reply', { detail: { text, threadId, reply: msg.content, label: null, error: null } }));
+    }
+    // ---------------------------------------------------------------- routing + asking
+    // Order: ask (only for a detected fork) -> live-data tool -> Python -> plain chat.
+    async function routeMessage(text, { skipClarify = false } = {}) {
+      const convNow = activeThreadId !== null ? conversations.get(activeThreadId) : null;
+      let note = null;
+      if (!parseWikiCommand(text) && !detectUrlSource(text)) {
+        if (!skipClarify) { const cl = detectClarify(text); if (cl) { await sendClarify(text, cl); return; } }
+        const dp = applyDatePref(text); // a remembered date order: rewrite, and say so
+        if (dp.note) { text = dp.text; note = dp.note; }
+        if (liveEnabled) {
+          const pick = pickTool(text, lastToolContext(convNow));
+          if (pick) { await sendTool(text, pick, { note }); return; }
+        }
+      }
+      if (shouldCompute(text, convNow)) { await sendCompute(text, { note }); return; }
+      await sendText(text, null, null, undefined, null);
+    }
+    // A question with one-tap answers; no model involved.
+    async function sendClarify(text, cl, extra = {}) {
+      let threadId = activeThreadId;
+      if (threadId === null) {
+        threadId = crypto.randomUUID();
+        activeThreadId = threadId;
+        conversations.set(threadId, { messages: [], session: null, streaming: false, abortController: null, forkMeta: null });
+      }
+      const conv = conversations.get(threadId);
+      if (!extra.reuseUser) conv.messages.push({ role: 'user', content: text });
+      conv.messages.push({ role: 'assistant', content: cl.question, clarify: { options: cl.options } });
+      persistThread(threadId);
+      if (activeThreadId === threadId) { stickToBottom = true; chatNote.textContent = ''; chatSendBtn.disabled = !promptOk; renderChat(); }
+      renderThreadList();
+      if (conv.messages.length === 2) maybeGenerateTitle(threadId, text);
+    }
+    async function answerClarify(i, k) {
+      const conv = activeConv();
+      const m = conv.messages[i], o = m && m.clarify && m.clarify.options[k];
+      if (!o || m.clarify.done) return;
+      if (o.remember) savePrefs(o.remember);
+      if (o.save) { saveHome({ ...loadHome(), ...o.save }); paintHome(); }
+      if (o.other) { m.clarify.done = o.label; renderChat(); chatInput.value = o.other; autoResize(); chatInput.focus(); return; }
+      // Drop the question-and-ask pair; the rewritten, unambiguous question is answered as usual.
+      conv.messages.splice(i - 1, 2);
+      if (conv.session) { try { conv.session.destroy(); } catch {} conv.session = null; }
+      persistThread(activeThreadId);
+      renderChat();
+      if (o.pick) { const pk = pickTool(o.text, null); if (pk) { await sendTool(o.text, pk, { pick: o.pick }); return; } }
+      await routeMessage(o.text, { skipClarify: true });
+    }
+    function clarifyHtml(m, i, active) {
+      if (!m.clarify) return '';
+      if (m.clarify.done) return '<div class="compute-box">→ ' + escapeHtml(m.clarify.done) + '</div>';
+      return '<div class="clarify-box">' + m.clarify.options.map((o, k) => '<button class="icon-btn clarify-btn" data-i="' + i + '" data-o="' + k + '"' + (active ? '' : ' disabled') + '>' + escapeHtml(o.label) + '</button>').join('') + '</div>';
     }
     function toolHtml(m) {
       const t = m.tool;
@@ -3623,12 +3686,7 @@
       attachmentChip.style.display = 'none';
       clearUrlContext();
       followupDismissed = false;
-      const convNow = activeThreadId !== null ? conversations.get(activeThreadId) : null;
-      if (!attachment && !urlContext && liveEnabled && !parseWikiCommand(text) && !detectUrlSource(text)) {
-        const pick = pickTool(text, lastToolContext(convNow));
-        if (pick) { await sendTool(text, pick); return; }
-      }
-      if (!attachment && !urlContext && shouldCompute(text, convNow)) { await sendCompute(text); return; }
+      if (!attachment && !urlContext) { await routeMessage(text); return; }
       await sendText(text, attachment, null, undefined, urlContext);
     }
 

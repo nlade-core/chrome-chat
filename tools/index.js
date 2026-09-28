@@ -28,9 +28,10 @@ export function pickTool(text, previous) {
   return null;
 }
 
-export async function runTool(pick, fetchFn) {
+export async function runTool(pick, fetchFn, opts = {}) {
   const home = homeContext();
-  try { return await pick.tool.run(pick.text, home, fetchFn); }
+  try { return await pick.tool.run(pick.text, home, fetchFn, opts); }
   catch (e) { return { error: pick.tool.label + ' service unreachable (' + String(e.message || e).slice(0, 80) + ').' }; }
 }
 export { homeContext };
+export { detectClarify, applyDatePref, loadPrefs, savePrefs } from './clarify.js';
