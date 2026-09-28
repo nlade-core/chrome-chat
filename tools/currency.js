@@ -36,10 +36,15 @@ const nameCode = (n) => { const l = n.toLowerCase(); const hit = NAMES.find(([re
 export const matchesCurrency = (text) => {
   // "pounds" as weight, and units that aren't money
   if (/\b(stones?|kg|kilo(gram)?s?|weigh\w*|lbs?|ounces?|oz|grams?|miles?|km|kilomet\w*|feet|foot|inch\w*|metres?|meters?)\b/i.test(text) && !/[£€$¥]|\b(GBP|EUR|USD)\b/.test(text)) return false;
-  const ms = mentions(text);
+  const ms = mentions(text).filter((m) => m.code);
   if (!ms.length) return false;
-  const conv = /\b(convert|conversion|in|into|to|as|worth|how much|how many|exchange|rate|equals?|is)\b/i.test(text);
-  return conv && (ms.length >= 2 || (ms.some((m) => m.amount != null) && /\b(in|into|to|as|convert|worth|how much|how many)\b/i.test(text)) || /\b(exchange )?rate\b/i.test(text));
+  // Arithmetic about money is Python's job, not a conversion: "a £240 jacket reduced by 17%... in pounds", "3 of the €58.11".
+  if (/%|\bper ?cent\b|\b(reduced|discount\w*|off|plus|minus|times|multipl\w*|divided|each|of the|of those|total|sum|average|split|share|tax|vat|interest|tip)\b|[×*÷]/i.test(text)) return false;
+  const codes = new Set(ms.map((m) => m.code));
+  if (/\b(exchange )?rate\b/i.test(text)) return true;
+  if (codes.size >= 2) return /\b(convert|conversion|in|into|to|as|worth|how much|how many|exchange|equals?|is)\b/i.test(text);
+  // One currency: a short conversion to your home currency ("how much is 100 dollars?").
+  return ms.some((m) => m.amount != null) && text.trim().split(/\s+/).length <= 8 && /\b(convert|in|into|worth|how much|how many)\b/i.test(text);
 };
 
 export function parseCurrency(text, home) {

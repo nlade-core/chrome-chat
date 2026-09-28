@@ -349,7 +349,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · <a href="?tour" id="tour-link">Take the tour</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 14:40 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 16:00 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -427,6 +427,7 @@
     import { looksComputable, normaliseQuestion, todayText } from './lab/compute-core.js';
     // Live-data tools (weather, currency): plain code picks at most one, answers are written from the data.
     import { pickTool, runTool, detectClarify, applyDatePref, savePrefs } from './tools/index.js';
+    import { looksLikeFollowUp, ruleRewrite, modelRewrite } from './tools/followup.js';
     import { homeContext, loadHome, saveHome } from './tools/context.js';
 
     const statusPill = document.getElementById('status-pill');
@@ -3450,7 +3451,7 @@
       if (conv && conv.messages.length && REFERS_BACK.test(text)) return false;
       return true;
     }
-    async function sendCompute(text, { note = null } = {}) {
+    async function sendCompute(text, { note = null, display = null, understood = null } = {}) {
       let threadId = activeThreadId;
       if (threadId === null) {
         threadId = crypto.randomUUID();
@@ -3459,7 +3460,7 @@
       }
       const conv = conversations.get(threadId);
       const isShown = () => activeThreadId === threadId;
-      conv.messages.push({ role: 'user', content: text });
+      conv.messages.push({ role: 'user', content: display || text });
       persistThread(threadId);
       const msg = { role: 'assistant', content: '', compute: { stage: 'Working it out…' } };
       conv.messages.push(msg);
@@ -3480,7 +3481,7 @@
       delete c.stage;
       if (r && r.out != null) {
         msg.content = r.writeup || ('The answer is ' + r.out + '.');
-        Object.assign(c, { result: r.out, code: r.code, steps: r.steps || [], repaired: !!r.repaired, normalised: r.normalised || null,
+        Object.assign(c, { question: text, understood, result: r.out, code: r.code, steps: r.steps || [], repaired: !!r.repaired, normalised: r.normalised || null,
           assumptions: [...(note ? [note] : []), ...(r.assumptions || [])], writeupChecked: !!r.writeup, writeupProblem: r.writeupProblem || null });
       } else if (r && r.gated) {
         msg.content = r.reply; delete msg.compute;
@@ -3523,7 +3524,7 @@
       const last = conv && conv.messages[conv.messages.length - 1];
       return last && last.role === 'assistant' && last.tool && last.tool.ctx ? last.tool.ctx : null;
     }
-    async function sendTool(text, pick, { note = null, pick: place = null } = {}) {
+    async function sendTool(text, pick, { note = null, pick: place = null, display = null, understood = null } = {}) {
       let threadId = activeThreadId;
       if (threadId === null) {
         threadId = crypto.randomUUID();
@@ -3532,7 +3533,7 @@
       }
       const conv = conversations.get(threadId);
       const isShown = () => activeThreadId === threadId;
-      conv.messages.push({ role: 'user', content: text });
+      conv.messages.push({ role: 'user', content: display || text });
       persistThread(threadId);
       const msg = { role: 'assistant', content: '', tool: { kind: pick.tool.kind, icon: pick.tool.icon, stage: pick.tool.kind === 'weather' ? 'Checking the forecast…' : 'Fetching the exchange rate…' } };
       conv.messages.push(msg);
@@ -3551,7 +3552,7 @@
       else {
         msg.content = r.answer;
         Object.assign(msg.tool, { source: r.source, sourceUrl: r.sourceUrl, assumptions: [...(note ? [note] : []), ...(r.assumptions || [])],
-          ctx: r.kind === 'weather' ? { kind: 'weather', place: r.place } : { kind: 'currency', from: r.from, amount: r.amount } });
+          ctx: r.kind === 'weather' ? { kind: 'weather', place: r.place, text } : { kind: 'currency', from: r.from, to: r.to, amount: r.amount }, understood });
       }
       msg.timingMs = { total: Math.round(performance.now() - startedAt) };
       conv.streaming = false;
@@ -3566,18 +3567,51 @@
     // Order: ask (only for a detected fork) -> live-data tool -> Python -> plain chat.
     async function routeMessage(text, { skipClarify = false } = {}) {
       const convNow = activeThreadId !== null ? conversations.get(activeThreadId) : null;
-      let note = null;
+      let note = null, display = null, understood = null;
       if (!parseWikiCommand(text) && !detectUrlSource(text)) {
-        if (!skipClarify) { const cl = detectClarify(text); if (cl) { await sendClarify(text, cl); return; } }
+        // A follow-up is made standalone first -- rules from the last answer, else a checked
+        // model rewrite -- and routed as that, if it lands on a tool or Python. Otherwise the
+        // original goes to the chat, which has the transcript.
+        const turns = recentTurns(convNow);
+        const isFollow = turns.length > 0 && looksLikeFollowUp(text, true);
+        const ctxNow = lastAnswerContext(convNow);
+        if (isFollow || ctxNow) {
+          let standalone = ruleRewrite(text, ctxNow, { followUp: isFollow });
+          if (!standalone && isFollow) {
+            if (activeThreadId !== null) chatNote.textContent = 'Reading that in context…';
+            try { const r = await modelRewrite(text, turns, (await loadCompute()).oneShot); standalone = r.standalone || null; } catch {}
+            chatNote.textContent = '';
+          }
+          if (standalone && standalone !== text && routesToAnswerer(standalone)) { display = text; understood = standalone; text = standalone; }
+        }
+        if (!skipClarify) { const cl = detectClarify(text); if (cl) { await sendClarify(text, cl, { display }); return; } }
         const dp = applyDatePref(text); // a remembered date order: rewrite, and say so
         if (dp.note) { text = dp.text; note = dp.note; }
         if (liveEnabled) {
-          const pick = pickTool(text, lastToolContext(convNow));
-          if (pick) { await sendTool(text, pick, { note }); return; }
+          const pick = understood ? pickTool(text, null) : pickTool(text, lastToolContext(convNow));
+          if (pick) { await sendTool(text, pick, { note, display, understood }); return; }
         }
       }
-      if (shouldCompute(text, convNow)) { await sendCompute(text, { note }); return; }
-      await sendText(text, null, null, undefined, null);
+      if (understood ? shouldCompute(text, null) : shouldCompute(text, convNow)) { await sendCompute(text, { note, display, understood }); return; }
+      await sendText(display || text, null, null, undefined, null);
+    }
+    // Would this standalone question go to a tool or Python (rather than the plain chat)?
+    const routesToAnswerer = (q) => !!(detectClarify(q) || (liveEnabled && pickTool(q, null)) || shouldCompute(q, null));
+    // The last few real turns (no clarification exchanges), for reading a follow-up in context.
+    function recentTurns(conv) {
+      if (!conv) return [];
+      return conv.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.clarify && m.content).slice(-4);
+    }
+    // What the last answer left behind: a tool's details or Python's question and result.
+    function lastAnswerContext(conv) {
+      // The most recent of the last 3 answers that left context behind -- a plain chat reply in between doesn't erase it.
+      // A computed result only from the immediately previous answer ("that" means the latest thing).
+      const recent = conv ? [...conv.messages].reverse().filter((m) => m.role === 'assistant' && !m.clarify).slice(0, 3) : [];
+      const last = recent.find((m, k) => (m.tool && m.tool.ctx) || (k === 0 && m.compute && m.compute.result != null));
+      if (!last) return null;
+      if (last.tool && last.tool.ctx) return last.tool.ctx;
+      if (last.compute && last.compute.result != null) return { kind: 'compute', question: last.compute.question, result: last.compute.result };
+      return null;
     }
     // A question with one-tap answers; no model involved.
     async function sendClarify(text, cl, extra = {}) {
@@ -3588,7 +3622,7 @@
         conversations.set(threadId, { messages: [], session: null, streaming: false, abortController: null, forkMeta: null });
       }
       const conv = conversations.get(threadId);
-      if (!extra.reuseUser) conv.messages.push({ role: 'user', content: text });
+      if (!extra.reuseUser) conv.messages.push({ role: 'user', content: extra.display || text });
       conv.messages.push({ role: 'assistant', content: cl.question, clarify: { options: cl.options } });
       persistThread(threadId);
       if (activeThreadId === threadId) { stickToBottom = true; chatNote.textContent = ''; chatSendBtn.disabled = !promptOk; renderChat(); }
@@ -3620,7 +3654,7 @@
       if (!t) return '';
       if (t.stage) return '<div class="compute-box">⏳ ' + escapeHtml(t.stage) + '</div>';
       if (t.error) return '<div class="compute-box warn">' + escapeHtml(t.icon) + ' No live answer — nothing was guessed.</div>';
-      return '<div class="compute-box"><div>' + escapeHtml(t.icon) + ' From live data: <a href="' + escapeHtml(t.sourceUrl) + '" target="_blank" rel="noopener">' + escapeHtml(t.source) + '</a></div>'
+      return '<div class="compute-box">' + (t.understood ? '<div class="compute-meta">Understood as: ' + escapeHtml(t.understood) + '</div>' : '') + '<div>' + escapeHtml(t.icon) + ' From live data: <a href="' + escapeHtml(t.sourceUrl) + '" target="_blank" rel="noopener">' + escapeHtml(t.source) + '</a></div>'
         + (t.assumptions && t.assumptions.length ? '<div class="compute-meta">Assumed: ' + escapeHtml(t.assumptions.join(' ')) + '</div>' : '')
         + '<div class="compute-meta">Written by plain code from the data — the model didn’t produce these numbers.</div></div>';
     }
@@ -3631,7 +3665,7 @@
       if (c.unverified) return '<div class="compute-box warn">⚠ ' + escapeHtml(c.unverified) + '</div>';
       const checked = ['the code computes from the question’s own values (a typed-in answer is sent back)', 'the answer has the expected type and format',
         c.writeupChecked ? 'the sentence contains the computed result unchanged and adds no other numbers' : null].filter(Boolean);
-      return '<div class="compute-box"><div>🐍 Computed with Python: <code>' + escapeHtml(String(c.result)) + '</code>'
+      return '<div class="compute-box">' + (c.understood ? '<div class="compute-meta">Understood as: ' + escapeHtml(c.understood) + '</div>' : '') + '<div>🐍 Computed with Python: <code>' + escapeHtml(String(c.result)) + '</code>'
         + (c.writeupProblem ? ' <span class="compute-meta">(the model’s sentence didn’t match the result, so it isn’t shown)</span>' : '') + '</div>'
         + (c.assumptions && c.assumptions.length ? '<div class="compute-meta">Assumed: ' + escapeHtml(c.assumptions.join(' ')) + '</div>' : '')
         + '<details><summary>Show the working</summary>'
