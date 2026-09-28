@@ -183,11 +183,17 @@ export function check(c, out) {
 // word, the numbers) -- a hard-coded guess fails it. One retry with the reason.
 
 export function inferType(q) {
+  // Two-part questions (added after the word-problem set: "On what date, and what
+  // day of the week", "How much does each get" were forced down to one value).
+  // (Widened after the rewrite said "and on what day" / "each person get".)
+  if (/\band (on |at |in )?(what|which|how)\b|\beach( \w+)? (get|gets|pay|pays|receive|receives)\b/i.test(q)) return 'multi';
   const dp = /(\d+) decimal places?/i.exec(q);
   if (dp) return 'decimal:' + dp[1];
   if (/day of the week/i.test(q)) return 'weekday';
   if (/\b(what|which) date\b/i.test(q)) return 'date';
   if (/\bwhat time\b/i.test(q)) return 'time';
+  // "How many minutes/litres..." is a measure, not a count: 4.8 minutes is fine (the taps question was rejected for that).
+  if (/\bhow many (minutes|hours|seconds|litres|liters|km|kilometres|miles|metres|meters|kg|grams|pounds|days on average)\b/i.test(q)) return 'number';
   if (/\bhow many\b|\bnumber of\b/i.test(q)) return 'int';
   if (/£|\bin pounds\b|\bprice\b/i.test(q)) return 'decimal:2';
   // Added after the first typed Nano run (declared "number" for a sort, "date" for a leap-year question):
@@ -220,18 +226,63 @@ export function missingInputs(q, code) {
   return miss;
 }
 
+// The looser check (added after the word-problem set, where "use every number"
+// forced irrelevant ones -- Sam's age, the tank's size -- into the sum): letter
+// questions must use the quoted word, and the code must use at least one of the
+// question's numbers. Hard-coded answers are caught separately, in Python, by
+// looking at the code itself (see pyWrapper). missingInputs above is kept for the record.
+export function inputProblem(q, code) {
+  const quoted = [...q.matchAll(/"([^"]+)"/g)].map((m) => m[1]).filter((w) => !code.includes(w));
+  if (quoted.length && /\b(letters?|how many|count|spell|backwards|words?)\b/i.test(q)) {
+    return 'your code does not use ' + quoted.map((w) => '"' + w + '"').join(', ') + ' from the question -- work on the string itself in Python (slicing, len(), .count()); do not write the answer yourself';
+  }
+  const qn = q.replace(/(\d),(?=\d{3}\b)/g, '$1').replace(/\d+ decimal places?/gi, '');
+  const nums = qn.match(/\d+(?:\.\d+)?/g) || [];
+  if (nums.length && missingInputs(q, code).length === new Set(nums).size) {
+    return 'your code uses none of the numbers in the question -- compute the answer from the values that matter; do not write the answer yourself';
+  }
+  return null;
+}
+
 export const PROMPT_TYPED = 'You are a helpful, concise assistant. You cannot see the individual letters of words, and you make arithmetic and date mistakes. '
   + 'So for ANY question that involves counting letters, numbers, arithmetic, percentages, dates or times -- even if it looks easy and even if you think you know the answer -- never work it out in your head: '
-  + 'think briefly, then write one ```python code block (standard library only) that (1) sets ANSWER_TYPE to one of "int", "number", "decimal:N" (N decimal places), "date", "weekday", "time", "text", '
-  + 'and (2) defines def answer(): which computes the result from the question\'s own values and returns it (an int, float, datetime.date or str). '
+  + 'think briefly, then write one ```python code block (standard library only) that (1) sets ANSWER_TYPE to one of "int", "number", "decimal:N" (N decimal places), "date", "weekday", "time", "text", "multi", '
+  + 'and (2) defines def answer(): which computes the result from the question\'s own values and returns it (an int, float, datetime.date or str; if the question asks for more than one thing, a dict such as {"Anna": 60, "Ben": 40}). '
+  + 'Use only the numbers that matter and ignore irrelevant details. '
   + 'Do not print anything: the code will be run, checked and formatted for you. If the question needs no calculation, answer it directly and briefly, with no code.';
 export const NUDGE_TYPED = 'Please answer that with a ```python code block that sets ANSWER_TYPE and defines def answer(), as instructed.';
 
 // Appended to the model's code. Checks answer()'s value against the type and
 // prints it with a marker; a failed check raises "ANSWER CHECK: <reason>".
-export const pyWrapper = (type) => String.raw`
-import datetime as _dt, re as _re
+export const pyWrapper = (type, code = '') => String.raw`
+import datetime as _dt, re as _re, ast as _ast
 _T = ${JSON.stringify(type)}
+_SRC = ${JSON.stringify(code)}
+def _hardcoded():
+    # answer() returns only fixed values, with no computation or branching:
+    # "return 14200761", "return datetime.date(2028, 3, 1)", "return ['a', 'b']".
+    try:
+        _f = [n for n in _ast.walk(_ast.parse(_SRC)) if isinstance(n, _ast.FunctionDef) and n.name == "answer"][0]
+    except Exception:
+        return False
+    def _lit(v):
+        if v is None or isinstance(v, _ast.Constant):
+            return True
+        if isinstance(v, _ast.UnaryOp):
+            return _lit(v.operand)
+        if isinstance(v, (_ast.List, _ast.Tuple, _ast.Set)):
+            return all(_lit(e) for e in v.elts)
+        if isinstance(v, _ast.Dict):
+            return all(_lit(e) for e in v.values)
+        if isinstance(v, _ast.Call):
+            _n = getattr(v.func, "attr", getattr(v.func, "id", ""))
+            return _n in ("date", "datetime", "time", "str", "int", "float") and all(_lit(a) for a in v.args)
+        return False
+    _rets = [n for n in _ast.walk(_f) if isinstance(n, _ast.Return)]
+    _logic = any(isinstance(n, (_ast.If, _ast.IfExp, _ast.For, _ast.While, _ast.Compare, _ast.BoolOp)) for n in _ast.walk(_f))
+    return bool(_rets) and all(_lit(n.value) for n in _rets) and not _logic
+if _hardcoded():
+    raise TypeError("ANSWER CHECK: answer() just returns a fixed value -- put the question's values in the code and compute from them (for example items = [...] then return sorted(items), or len(word), or a * b) instead of writing the answer yourself")
 _r = answer()
 if _T == "auto":
     # No type inferred from the question: format by what the value is (the
@@ -284,6 +335,21 @@ elif _T == "time":
     if not _m or int(_m.group(1)) > 23 or int(_m.group(2)) > 59:
         _bad("this question needs a time as HH:MM")
     _out = "%02d:%s" % (int(_m.group(1)), _m.group(2))
+elif _T == "multi":
+    def _f(v):
+        if isinstance(v, bool):
+            return "yes" if v else "no"
+        if isinstance(v, (_dt.date, _dt.datetime)):
+            return v.isoformat()[:10]
+        if isinstance(v, float):
+            return str(int(v)) if v.is_integer() else repr(round(v, 10))
+        return str(v)
+    if isinstance(_r, dict):
+        _out = ", ".join(str(k) + ": " + _f(v) for k, v in _r.items())
+    elif isinstance(_r, (list, tuple)):
+        _out = ", ".join(_f(v) for v in _r)
+    else:
+        _out = _f(_r)
 elif _T == "yesno":
     _s = _r.strip().lower().rstrip(".") if isinstance(_r, str) else None
     if _s in ("yes", "no", "true", "false"):
@@ -316,14 +382,51 @@ export function tidyCode(code) {
   return 'import datetime, math, calendar\n' + lines.map((l) => l.slice(Math.min(ind, l.match(/^ */)[0].length))).join('\n');
 }
 
+// ------------------------------------------------------------------ question resolution
+// A first, throwaway model call rewrites the question clearly -- spelling fixed,
+// numbers as digits, times as HH:MM, assumptions stated -- without answering it.
+// Plain code then checks the rewrite kept the question intact; if not, the
+// original is used. (Added 2026-09-28 at the user's suggestion.)
+export const PROMPT_RESOLVE = 'Rewrite the user\'s question so it is clear and self-contained. Do NOT answer it. '
+  + 'Fix spelling and grammar, but copy any text inside quotation marks exactly, letter for letter. '
+  + 'Write every number as digits (for example "two hundred and forty" becomes 240), clock times as HH:MM in 24-hour time, and dates as "D Month YYYY". '
+  + 'Keep every number and detail from the original and add nothing new. If something is ambiguous (for example 3/4/2027), '
+  + 'choose the most likely reading for a UK user and record it as an assumption. Reply as JSON.';
+export const RESOLVE_SCHEMA = { type: 'object', properties: { question: { type: 'string' }, assumptions: { type: 'array', items: { type: 'string' }, maxItems: 3 } }, required: ['question', 'assumptions'] };
+
+export function checkRewrite(orig, rewrite) {
+  if (!rewrite || typeof rewrite !== 'string') return 'no rewrite';
+  if (rewrite.length > orig.length * 3 + 200) return 'rewrite much longer than the question';
+  for (const m of orig.matchAll(/"([^"]+)"/g)) if (!rewrite.includes(m[1])) return 'changed the quoted text "' + m[1] + '"';
+  const nums = (s) => (s.replace(/(\d),(?=\d{3}\b)/g, '$1').match(/\d+(?:\.\d+)?/g) || []).map(Number);
+  const got = nums(rewrite);
+  for (const n of nums(orig)) if (!got.some((x) => Math.abs(x - n) < 1e-9)) return 'dropped the number ' + n;
+  return null;
+}
+
+export async function resolveQuestion(q, io) {
+  let raw = '', parsed = null;
+  try {
+    raw = await io.resolve(PROMPT_RESOLVE, q, RESOLVE_SCHEMA);
+    parsed = JSON.parse((/\{[\s\S]*\}/.exec(raw) || [raw])[0]);
+  } catch (e) { return { question: q, assumptions: [], used: false, reason: 'no usable rewrite (' + String(e.message || e).slice(0, 60) + ')', raw }; }
+  const rewrite = String(parsed.question || '').trim();
+  const assumptions = Array.isArray(parsed.assumptions) ? parsed.assumptions.map(String).slice(0, 3) : [];
+  const bad = checkRewrite(q, rewrite);
+  return bad ? { question: q, assumptions: [], used: false, reason: bad, rewrite } : { question: rewrite, assumptions, used: rewrite !== q };
+}
+
 // The whole typed pipeline, shared by the page and the stand-in runner.
 // io: { first(system, q) -> reply, again(text) -> reply (same conversation), py(code) -> { ok, out, err } }
-export async function typedAnswer(q, io) {
-  const r = { typed: true, inferred: inferType(q), problems: [], repaired: false };
+export async function typedAnswer(q0, io, { resolve = false } = {}) {
+  let q = q0;
+  const r = { typed: true, problems: [], repaired: false };
+  if (resolve && io.resolve) { r.resolved = await resolveQuestion(q0, io); q = r.resolved.question; }
+  r.inferred = inferType(q0) === 'multi' ? 'multi' : inferType(q);
   // Plain code decides whether tools are offered at all (added after Nano, told
   // "ANY question involving numbers", wrote code for 11 of 18 plain questions).
   if (!looksComputable(q)) { r.gated = true; r.reply = await io.first(PROMPT_PLAIN, q); r.code = null; r.final = r.reply; return r; }
-  r.reply = await io.first(PROMPT_TYPED, q);
+  r.reply = await io.first(PROMPT_TYPED, q + (r.resolved && r.resolved.assumptions.length ? '\n(Assumptions: ' + r.resolved.assumptions.join('; ') + ')' : ''));
   r.code = extractPython(r.reply);
   if (!r.code && looksComputable(q)) {
     r.nudged = true;
@@ -337,13 +440,13 @@ export async function typedAnswer(q, io) {
     r.declared = declaredType(r.code);
     r.type = r.inferred || 'auto';
     r.typeMismatch = !!(r.inferred && r.declared && r.inferred !== r.declared);
-    const missing = missingInputs(q, r.code);
+    const inputs = inputProblem(q, r.code);
     let problem = null;
     if (!/def\s+answer\s*\(/.test(r.code)) problem = 'define def answer(): that returns the final value';
-    else if (missing.length) problem = 'your code does not use ' + missing.join(', ') + ' from the question -- include ' + (missing.length > 1 ? 'them' : 'it') + ' in the code and compute the answer from ' + (missing.length > 1 ? 'them' : 'it') + '; do not write the answer yourself'
-      + (missing.some((m) => m.startsWith('"')) ? ' (work on the string itself in Python: slicing, len(), .count())' : '');
+    else if (inputs) problem = inputs;
     else {
-      const run = await io.py(tidyCode(r.code) + '\n' + pyWrapper(r.type));
+      const tidy = tidyCode(r.code);
+      const run = await io.py(tidy + '\n' + pyWrapper(r.type, tidy));
       const m = run.ok && /__ANSWER__=(.*)$/m.exec(run.out);
       if (m) { r.out = r.final = m[1].trim(); r.checks = attempt ? 'passed on retry' : 'passed'; return r; }
       // The reason is on the "TypeError: ANSWER CHECK: ..." line -- not the traceback's copy of the raise statement.
