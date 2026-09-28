@@ -1,4 +1,4 @@
-// Usage: node eval/compute.mjs [--model gemma4:e4b] [--runs 3] [--no-plain] [--strict] [--nudge] [--typed] [--set tune|held|held2|probe|words|messy|steps|all] [--resolve] [--no-writeup]
+// Usage: node eval/compute.mjs [--model gemma4:e4b] [--runs 3] [--no-plain] [--strict] [--nudge] [--typed] [--set tune|held|held2|probe|words|messy|steps|regress|all] [--resolve] [--no-writeup]
 //
 // The compute lab (lab/compute.html) with local stand-ins: Ollama for Gemini
 // Nano (temperature 1, topK 3, hidden reasoning off) and local python3 for
@@ -20,7 +20,7 @@ const resolve = process.argv.includes('--resolve');
 const writeUp = !process.argv.includes('--no-writeup');
 const WU = { kept: 0, rejected: 0, steps: 0, ms: [] };
 const set = arg('set', 'tune'); // tune | held | all
-const SET = CASES.filter((c) => set === 'all' || set === c.set);
+const SET = CASES.filter((c) => set === 'all' || set === c.set || (set === 'regress' && !!c.held));
 
 function runPython(code) {
   try { return { ok: true, out: execFileSync('python3', ['-I', '-c', code], { timeout: 10000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim() }; }
@@ -61,10 +61,13 @@ async function withTools(q) {
 
 console.log('model stand-in:', model, '| mode:', typed ? 'TYPED' + (resolve ? ' + resolve' : '') : 'plain code', '| tool prompt:', TOOLS === PROMPT_TOOLS ? 'lenient' : 'strict', '| nudge:', doNudge ? 'on' : 'off', '| set:', set, '| runs per case:', runs, '| baseline:', doPlain ? 'on' : 'off', '\n');
 const T = { cT: 0, cP: 0, cN: 0, used: 0, dT: 0, dP: 0, dN: 0, falseTrig: 0, rep: 0 };
+const tStart = Date.now(); const toolMs = [];
 for (const c of SET) {
   let pass = 0, used = 0, rep = 0, plainPass = 0; const outs = [];
   for (let i = 0; i < runs; i++) {
+    const t0 = Date.now();
     const r = await withTools(c.q);
+    toolMs.push(Date.now() - t0);
     if (check(c, r.final)) pass++; if (r.code) used++; if (r.repaired) rep++;
     if (r.writeup) WU.kept++; if (r.writeupProblem) { WU.rejected++; console.error('   write-up rejected #' + c.id + ': ' + r.writeupProblem + ' :: ' + (r.writeupRejected || '').slice(0, 120)); }
     if (r.steps && r.steps.length) WU.steps++;
@@ -78,4 +81,6 @@ for (const c of SET) {
 console.log('\ncompute questions: with tools', T.cT + '/' + T.cN, '| plain', T.cP + '/' + T.cN, '| used code when needed', T.used + '/' + T.cN);
 console.log('near-misses:       with tools', T.dT + '/' + T.dN, '| plain', T.dP + '/' + T.dN, '| false triggers (code when not needed)', T.falseTrig + '/' + T.dN);
 console.log('repairs attempted:', T.rep);
+const med = toolMs.slice().sort((a, b) => a - b)[toolMs.length >> 1];
+console.log('time per answer with tools: median', med, 'ms, mean', Math.round(toolMs.reduce((a, b) => a + b, 0) / toolMs.length), 'ms | whole run', Math.round((Date.now() - tStart) / 1000), 's');
 if (typed) console.log('write-ups kept:', WU.kept, '| rejected:', WU.rejected, '| median write-up ms:', WU.ms.length ? WU.ms.sort((a, b) => a - b)[WU.ms.length >> 1] : '-', '| runs that used intermediate steps:', WU.steps);

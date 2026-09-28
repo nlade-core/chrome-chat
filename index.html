@@ -225,6 +225,8 @@
   .compute-box summary { cursor: pointer; color: var(--muted); }
   .compute-box pre { white-space: pre-wrap; overflow-wrap: anywhere; background: color-mix(in srgb, var(--fg) 6%, transparent); border-radius: 6px; padding: 0.5rem; margin: 0.3rem 0; font-size: 0.8rem; }
   .compute-box .compute-meta { color: var(--muted); margin-top: 0.25rem; }
+  .home-settings { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; align-items: center; }
+  .home-settings input, .home-settings select { font: inherit; padding: 0.2rem 0.4rem; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
   .msg-actions { margin-top: 0.5rem; display: flex; gap: 0.4rem; }
   .msg-actions .icon-btn {
     background: transparent;
@@ -344,7 +346,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · <a href="?tour" id="tour-link">Take the tour</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 12:10 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 13:30 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -359,6 +361,9 @@
           <span style="display:flex;gap:0.5rem;margin-top:0.4rem;"><button type="button" id="offline-connect-btn" class="icon-btn">Connect a .zim file…</button><button type="button" id="offline-disconnect-btn" class="icon-btn" style="display:none;">Disconnect</button></span></p>
         <p><strong>Sums, dates and letters:</strong> for things a small model gets wrong in its head — arithmetic, percentages, dates, clock times, counting letters — it writes a few lines of Python instead, which run <em>in this page</em>, in a sandbox with no network access. Plain code checks the working before you see it: the code has to compute from your question's own values (a typed-in answer is sent back), the answer has to have the right type (a date, a whole number…), and the model's sentence must contain the computed result unchanged. Every such answer has <em>Show the working</em>. The Python runtime (Pyodide, about 12 MB) downloads once from cdn.jsdelivr.net the first time it's needed — no question or data is sent with it. <strong>Not checked:</strong> whether the code understood the question (a logic slip can still give a wrong answer — that's why the code is shown); anything that needs live data; and follow-ups that refer back to an earlier message ("and at 20%?"), which go to the normal chat. Dates written like 3/4/2027 are read as day/month and the answer says so. On unseen questions it took the model from 61% to 87% right — <a href="lab/findings.html" target="_blank" rel="noopener">how it was measured</a>.
           <label style="display:block;margin-top:0.35rem;"><input type="checkbox" id="compute-toggle"> Use Python for sums and dates</label></p>
+        <p><strong>Weather and currency:</strong> questions like "weather in Edinburgh tomorrow" or "£50 in euros" are answered from live data, not the model: weather from <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>, exchange rates from the European Central Bank via <a href="https://www.frankfurter.dev/" target="_blank" rel="noopener">Frankfurter</a> (daily reference rates — not what a bank or card will charge). The answer is written by plain code from the numbers, with its source. Only the place name, or the two currency codes, is sent to those services. With no place or currency in the question, it uses your saved ones below, or guesses from your browser (time zone for the place, language region for the currency) and says so.
+          <span class="home-settings"><input id="home-place" placeholder="Home town, e.g. Edinburgh" size="22"><input id="home-currency" placeholder="Currency, e.g. GBP" size="10" maxlength="3"><button type="button" id="home-save" class="icon-btn">Save</button><span id="home-note" class="cite-meta"></span></span>
+          <label style="display:block;margin-top:0.35rem;"><input type="checkbox" id="live-toggle"> Answer weather and currency questions from live data</label></p>
         <p><strong>Requirements:</strong> branded Google Chrome (desktop), a recent enough version to support the on-device Prompt API. It won't work in other browsers, or in plain Chromium.</p>
         <p><strong>Fully open source</strong> (GPL-3.0) — every line of what's running is in the public repository linked in the sidebar, nothing hidden. Offline Wikipedia uses <a href="https://github.com/openzim/javascript-libzim" target="_blank" rel="noopener">Kiwix's libzim</a> (GPL-3.0); Wikipedia text is CC BY-SA 4.0.</p>
       </div>
@@ -417,6 +422,9 @@
     // The compute path's gate and question normaliser (plain code, same origin, ~30 KB);
     // the runtime itself -- Python worker, model calls -- loads only when first needed.
     import { looksComputable, normaliseQuestion, todayText } from './lab/compute-core.js';
+    // Live-data tools (weather, currency): plain code picks at most one, answers are written from the data.
+    import { pickTool, runTool } from './tools/index.js';
+    import { homeContext, loadHome, saveHome } from './tools/context.js';
 
     const statusPill = document.getElementById('status-pill');
     const newChatBtn = document.getElementById('new-chat-btn');
@@ -936,7 +944,7 @@
                 sessionPart +
               '</div>'
             : '';
-          row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + computeHtml(m) + timingHtml + actions + '</div>';
+          row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + computeHtml(m) + toolHtml(m) + timingHtml + actions + '</div>';
         }
         chatLog.appendChild(row);
       });
@@ -3433,6 +3441,7 @@
     function shouldCompute(text, conv) {
       if (!computeEnabled || !text || parseWikiCommand(text) || detectUrlSource(text)) return false;
       if (!looksComputable(normaliseQuestion(text))) return false;
+      if (pickTool(text, null)) return false; // weather/currency need live data: Python would only compute from a remembered rate or forecast
       if (conv && conv.messages.length && REFERS_BACK.test(text)) return false;
       return true;
     }
@@ -3485,6 +3494,72 @@
       renderThreadList();
       if (conv.messages.length === 2) maybeGenerateTitle(threadId, text);
       document.dispatchEvent(new CustomEvent('chat:reply', { detail: { text, threadId, reply: msg.content, label: null, error: null } }));
+    }
+    // ---------------------------------------------------------------- live-data tools
+    let liveEnabled = true;
+    try { liveEnabled = localStorage.getItem('chrome-chat-live') !== 'off'; } catch {}
+    const liveToggle = document.getElementById('live-toggle');
+    liveToggle.checked = liveEnabled;
+    liveToggle.addEventListener('change', () => { liveEnabled = liveToggle.checked; try { localStorage.setItem('chrome-chat-live', liveEnabled ? 'on' : 'off'); } catch {} });
+    const homePlaceEl = document.getElementById('home-place'), homeCurrencyEl = document.getElementById('home-currency'), homeNoteEl = document.getElementById('home-note');
+    function paintHome() {
+      const saved = loadHome(), h = homeContext();
+      homePlaceEl.value = saved.place || ''; homeCurrencyEl.value = saved.currency || '';
+      homeNoteEl.textContent = 'Now using: ' + (h.place || 'no place') + (h.placeSource ? ' (' + h.placeSource + ')' : '') + ', ' + (h.currency || 'no currency') + (h.currencySource ? ' (' + h.currencySource + ')' : '');
+    }
+    document.getElementById('home-save').addEventListener('click', () => {
+      const cur = homeCurrencyEl.value.trim().toUpperCase();
+      saveHome({ place: homePlaceEl.value.trim() || undefined, currency: /^[A-Z]{3}$/.test(cur) ? cur : undefined });
+      paintHome();
+    });
+    paintHome();
+    // The previous reply's tool details, for a short follow-up ("and tomorrow?").
+    function lastToolContext(conv) {
+      const last = conv && conv.messages[conv.messages.length - 1];
+      return last && last.role === 'assistant' && last.tool && last.tool.ctx ? last.tool.ctx : null;
+    }
+    async function sendTool(text, pick) {
+      let threadId = activeThreadId;
+      if (threadId === null) {
+        threadId = crypto.randomUUID();
+        activeThreadId = threadId;
+        conversations.set(threadId, { messages: [], session: null, streaming: false, abortController: null, forkMeta: null });
+      }
+      const conv = conversations.get(threadId);
+      const isShown = () => activeThreadId === threadId;
+      conv.messages.push({ role: 'user', content: text });
+      persistThread(threadId);
+      const msg = { role: 'assistant', content: '', tool: { kind: pick.tool.kind, icon: pick.tool.icon, stage: pick.tool.kind === 'weather' ? 'Checking the forecast…' : 'Fetching the exchange rate…' } };
+      conv.messages.push(msg);
+      conv.streaming = true;
+      if (isShown()) { chatSendBtn.disabled = true; stickToBottom = true; chatNote.textContent = msg.tool.stage; renderChat(); }
+      renderThreadList();
+      const startedAt = performance.now();
+      const r = await runTool(pick);
+      delete msg.tool.stage;
+      if (r.error) { msg.content = r.error; msg.tool.error = true; }
+      else {
+        msg.content = r.answer;
+        Object.assign(msg.tool, { source: r.source, sourceUrl: r.sourceUrl, assumptions: r.assumptions || [],
+          ctx: r.kind === 'weather' ? { kind: 'weather', place: r.place } : { kind: 'currency', from: r.from, amount: r.amount } });
+      }
+      msg.timingMs = { total: Math.round(performance.now() - startedAt) };
+      conv.streaming = false;
+      if (conv.session) { try { conv.session.destroy(); } catch {} conv.session = null; } // rebuilt from the transcript next time
+      persistThread(threadId);
+      if (isShown()) { chatNote.textContent = ''; chatSendBtn.disabled = !promptOk; renderChat(); }
+      renderThreadList();
+      if (conv.messages.length === 2) maybeGenerateTitle(threadId, text);
+      document.dispatchEvent(new CustomEvent('chat:reply', { detail: { text, threadId, reply: msg.content, label: null, error: null } }));
+    }
+    function toolHtml(m) {
+      const t = m.tool;
+      if (!t) return '';
+      if (t.stage) return '<div class="compute-box">⏳ ' + escapeHtml(t.stage) + '</div>';
+      if (t.error) return '<div class="compute-box warn">' + escapeHtml(t.icon) + ' No live answer — nothing was guessed.</div>';
+      return '<div class="compute-box"><div>' + escapeHtml(t.icon) + ' From live data: <a href="' + escapeHtml(t.sourceUrl) + '" target="_blank" rel="noopener">' + escapeHtml(t.source) + '</a></div>'
+        + (t.assumptions && t.assumptions.length ? '<div class="compute-meta">Assumed: ' + escapeHtml(t.assumptions.join(' ')) + '</div>' : '')
+        + '<div class="compute-meta">Written by plain code from the data — the model didn’t produce these numbers.</div></div>';
     }
     function computeHtml(m) {
       const c = m.compute;
@@ -3548,7 +3623,12 @@
       attachmentChip.style.display = 'none';
       clearUrlContext();
       followupDismissed = false;
-      if (!attachment && !urlContext && shouldCompute(text, activeThreadId !== null ? conversations.get(activeThreadId) : null)) { await sendCompute(text); return; }
+      const convNow = activeThreadId !== null ? conversations.get(activeThreadId) : null;
+      if (!attachment && !urlContext && liveEnabled && !parseWikiCommand(text) && !detectUrlSource(text)) {
+        const pick = pickTool(text, lastToolContext(convNow));
+        if (pick) { await sendTool(text, pick); return; }
+      }
+      if (!attachment && !urlContext && shouldCompute(text, convNow)) { await sendCompute(text); return; }
       await sendText(text, attachment, null, undefined, urlContext);
     }
 
@@ -3633,6 +3713,10 @@
       // A computed answer regenerates through the compute path (the chat session
       // was cleared after it, so the generic path below would silently do nothing).
       const prior = conv && conv.messages[assistantIndex - 1];
+      if (conv && !conv.streaming && conv.messages[assistantIndex] && conv.messages[assistantIndex].tool && prior && prior.role === 'user') {
+        const pick = pickTool(prior.content, null);
+        if (pick) { conv.messages = conv.messages.slice(0, assistantIndex - 1); stickToBottom = true; renderChat(); await sendTool(prior.content, pick); return; }
+      }
       if (conv && !conv.streaming && conv.messages[assistantIndex] && conv.messages[assistantIndex].compute && prior && prior.role === 'user') {
         conv.messages = conv.messages.slice(0, assistantIndex - 1);
         stickToBottom = true; renderChat();
