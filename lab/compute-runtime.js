@@ -95,7 +95,7 @@ export async function oneShot(system, text, schema) {
 // One question through the typed pipeline. onStage(text) reports progress
 // ("Running Python…"); onResult(value) fires as soon as the checked value exists,
 // before the write-up -- so the chat can show the number first.
-export async function computeAnswer(q, { resolve = false, writeUp = true, onText, onStage, onResult, onDownload } = {}) {
+export async function computeAnswer(q, { resolve = false, writeUp = true, force = false, onText, onStage, onResult, onDownload } = {}) {
   let session = null, modelMs = 0, pyMs = 0, writeupMs = 0;
   const stage = (s) => { if (onStage) onStage(s); };
   const timed = async (p) => { const t0 = performance.now(); try { return await p; } finally { modelMs += Math.round(performance.now() - t0); } };
@@ -107,7 +107,7 @@ export async function computeAnswer(q, { resolve = false, writeUp = true, onText
       writeup: async (system, text) => { stage('Writing the answer…'); const t0 = performance.now(); try { return await oneShot(system, text); } finally { writeupMs += Math.round(performance.now() - t0); } },
       again: (text) => { stage('Checking the working…'); return timed(followUp(session, text)); },
       py: async (code) => { stage(py.info ? 'Running Python…' : 'Loading Python (one-off download, ~12 MB)…'); const x = await runPython(code); pyMs += x.ms || 0; return x; },
-    }, { resolve, writeUp, onResult });
+    }, { resolve, writeUp, onResult, force });
     return Object.assign(r, { modelMs, pyMs, writeupMs });
   } finally { try { session && session.destroy(); } catch {} }
 }

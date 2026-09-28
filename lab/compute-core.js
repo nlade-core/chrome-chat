@@ -505,7 +505,7 @@ export async function resolveQuestion(q, io) {
 
 // The whole typed pipeline, shared by the page and the stand-in runner.
 // io: { first(system, q) -> reply, again(text) -> reply (same conversation), py(code) -> { ok, out, err } }
-export async function typedAnswer(q0, io, { resolve = false, writeUp = true, maxSteps = 3, onResult = null } = {}) {
+export async function typedAnswer(q0, io, { resolve = false, writeUp = true, maxSteps = 3, onResult = null, force = false } = {}) {
   let q = q0;
   const r = { typed: true, problems: [], repaired: false, steps: [], assumptions: [] };
   // 1. Plain-code normalising: number words and clock phrases -> digits (instant, never wrong about what was said).
@@ -516,13 +516,14 @@ export async function typedAnswer(q0, io, { resolve = false, writeUp = true, max
   r.inferred = inferType(q0) === 'multi' ? 'multi' : inferType(q);
   // Plain code decides whether tools are offered at all (added after Nano, told
   // "ANY question involving numbers", wrote code for 11 of 18 plain questions).
-  if (!looksComputable(q)) { r.gated = true; r.reply = await io.first(PROMPT_PLAIN, q); r.code = null; r.final = r.reply; return r; }
+  // (force: the user asked for Python explicitly -- no gate.)
+  if (!force && !looksComputable(q)) { r.gated = true; r.reply = await io.first(PROMPT_PLAIN, q); r.code = null; r.final = r.reply; return r; }
   // Stated, not silent: an all-numbers date is read the UK way (a probe showed "3/4/2027" read as 4 March every time, unflagged).
   if (/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(q)) r.assumptions.push('Dates like 3/4/2027 are read as day/month/year (UK).');
   if (r.resolved) r.assumptions.push(...r.resolved.assumptions);
   r.reply = await io.first(PROMPT_TYPED, q + (r.assumptions.length ? '\n(Assumptions: ' + r.assumptions.join(' ') + ')' : ''));
   r.code = extractPython(r.reply);
-  if (!r.code && looksComputable(q)) {
+  if (!r.code && (force || looksComputable(q))) {
     r.nudged = true;
     const more = await io.again(NUDGE_TYPED);
     r.reply += '\n\n[nudged]\n\n' + more;

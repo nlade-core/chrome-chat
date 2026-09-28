@@ -349,7 +349,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · <a href="?tour" id="tour-link">Take the tour</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 16:00 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 18:00 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -428,6 +428,8 @@
     // Live-data tools (weather, currency): plain code picks at most one, answers are written from the data.
     import { pickTool, runTool, detectClarify, applyDatePref, savePrefs } from './tools/index.js';
     import { looksLikeFollowUp, ruleRewrite, modelRewrite } from './tools/followup.js';
+    import { detectExplicit } from './tools/intent.js';
+    import { TOOLS } from './tools/index.js';
     import { homeContext, loadHome, saveHome } from './tools/context.js';
 
     const statusPill = document.getElementById('status-pill');
@@ -3451,7 +3453,7 @@
       if (conv && conv.messages.length && REFERS_BACK.test(text)) return false;
       return true;
     }
-    async function sendCompute(text, { note = null, display = null, understood = null } = {}) {
+    async function sendCompute(text, { note = null, display = null, understood = null, force = false } = {}) {
       let threadId = activeThreadId;
       if (threadId === null) {
         threadId = crypto.randomUUID();
@@ -3471,7 +3473,7 @@
       let r = null, reason = null;
       try {
         const rt = await loadCompute();
-        r = await rt.computeAnswer(text, {
+        r = await rt.computeAnswer(text, { force,
           onStage: (st) => { if (msg.compute) msg.compute.stage = st; if (isShown()) { chatNote.textContent = st; renderChat(); } },
           onResult: (v) => { msg.compute.result = v; msg.content = 'Computed: **' + v + '**'; if (isShown()) renderChat(); },
           onDownload: (p) => { if (isShown()) chatNote.textContent = 'Downloading the model… ' + Math.round(p * 100) + '%'; },
@@ -3568,6 +3570,23 @@
     async function routeMessage(text, { skipClarify = false } = {}) {
       const convNow = activeThreadId !== null ? conversations.get(activeThreadId) : null;
       let note = null, display = null, understood = null;
+      // An explicit request ("ask the weather API…", "use Python for that", "look it up on
+      // Wikipedia", "don't use tools") wins over automatic routing.
+      const ex = !parseWikiCommand(text) && !detectUrlSource(text) ? detectExplicit(text) : null;
+      if (ex) {
+        const prev = previousQuestion(convNow);
+        const q = ex.refersBack ? (prev || ex.rest) : ex.rest;
+        const asked = q && q !== text ? q : null;
+        if (ex.kind === 'none') { await sendText(text, null, null, undefined, null); return; }
+        if (ex.kind === 'wiki' && q) { chatInput.value = '/wiki ' + q; await sendChat(); return; }
+        if (ex.kind === 'python' && q) { await sendCompute(q, { display: text, understood: asked, force: true }); return; }
+        if ((ex.kind === 'weather' || ex.kind === 'currency') && q) {
+          const tool = TOOLS.find((t) => t.kind === ex.kind);
+          const toolText = ex.kind === 'weather' && !/weather|forecast|rain|snow|temperature/i.test(q) ? 'weather ' + q : q;
+          await sendTool(toolText, { tool, text: toolText }, { display: text, understood: toolText !== text ? toolText : null });
+          return;
+        }
+      }
       if (!parseWikiCommand(text) && !detectUrlSource(text)) {
         // A follow-up is made standalone first -- rules from the last answer, else a checked
         // model rewrite -- and routed as that, if it lands on a tool or Python. Otherwise the
@@ -3594,6 +3613,18 @@
       }
       if (understood ? shouldCompute(text, null) : shouldCompute(text, convNow)) { await sendCompute(text, { note, display, understood }); return; }
       await sendText(display || text, null, null, undefined, null);
+    }
+    // The previous question in this conversation (how an earlier answer understood it, if it rewrote it).
+    function previousQuestion(conv) {
+      if (!conv) return null;
+      const ms = conv.messages;
+      for (let i = ms.length - 1; i > 0; i--) {
+        const a = ms[i];
+        if (a.role !== 'assistant' || a.clarify) continue;
+        const u = ms[i - 1];
+        return (a.compute && (a.compute.understood || a.compute.question)) || (a.tool && a.tool.understood) || (u && u.role === 'user' ? u.content : null);
+      }
+      return null;
     }
     // Would this standalone question go to a tool or Python (rather than the plain chat)?
     const routesToAnswerer = (q) => !!(detectClarify(q) || (liveEnabled && pickTool(q, null)) || shouldCompute(q, null));
