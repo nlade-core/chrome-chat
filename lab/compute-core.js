@@ -386,7 +386,8 @@ print("__ANSWER__=" + _out)
 // indentation common to every line (" ANSWER_TYPE = ..." -> IndentationError)
 // and pre-import the modules it kept using without importing (datetime x3).
 export function tidyCode(code) {
-  const lines = code.replace(/\t/g, '    ').split('\n');
+  // "▁" is SentencePiece's space marker; gemma3n via Ollama leaked it into indentation, failing every answer.
+  const lines = code.replace(/\u2581/g, ' ').replace(/\t/g, '    ').split('\n');
   const ind = Math.min(...lines.filter((l) => l.trim()).map((l) => l.match(/^ */)[0].length));
   return 'import datetime, math, calendar\n' + lines.map((l) => l.slice(Math.min(ind, l.match(/^ */)[0].length))).join('\n');
 }
