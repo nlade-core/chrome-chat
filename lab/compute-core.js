@@ -236,11 +236,10 @@ export function inputProblem(q, code) {
   if (quoted.length && /\b(letters?|how many|count|spell|backwards|words?)\b/i.test(q)) {
     return 'your code does not use ' + quoted.map((w) => '"' + w + '"').join(', ') + ' from the question -- work on the string itself in Python (slicing, len(), .count()); do not write the answer yourself';
   }
-  const qn = q.replace(/(\d),(?=\d{3}\b)/g, '$1').replace(/\d+ decimal places?/gi, '');
-  const nums = qn.match(/\d+(?:\.\d+)?/g) || [];
-  if (nums.length && missingInputs(q, code).length === new Set(nums).size) {
-    return 'your code uses none of the numbers in the question -- compute the answer from the values that matter; do not write the answer yourself';
-  }
+  // (A "uses none of the question's numbers" check lived here; removed after the
+  // full Nano run 2026-09-28: Nano returned the correct literal for 2^64 and never
+  // understood that message, 0/3 -- the code-reading hard-coding check in pyWrapper
+  // covers literal answers and says how to compute.)
   return null;
 }
 
@@ -344,6 +343,8 @@ elif _T == "multi":
         if isinstance(v, float):
             return str(int(v)) if v.is_integer() else repr(round(v, 10))
         return str(v)
+    if not (isinstance(_r, (dict, list, tuple)) and len(_r) >= 2):
+        _bad("the question asks for more than one thing -- return a dict with each part, for example {\"date\": d, \"weekday\": d.strftime(\"%A\")}")
     if isinstance(_r, dict):
         _out = ", ".join(str(k) + ": " + _f(v) for k, v in _r.items())
     elif isinstance(_r, (list, tuple)):
