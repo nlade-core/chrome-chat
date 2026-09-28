@@ -1,0 +1,11 @@
+{
+  "status": "PROPOSED by the assistant 2026-09-28 — awaiting the user's review (reply in chat to change any)",
+  "cases": {
+    "43": { "accept": ["Andy Burnham"], "why": "Both Wikidata and Wikipedia: PM since July 2026 (after the drafter's training; draft was wrong)" },
+    "51": { "accept": ["Spain"], "why": "Article: Spain beat Argentina 1–0 after extra time in the final" },
+    "23": { "accept": ["1582", "1583"], "why": "Royal charter 1582, teaching began 1583" },
+    "24": { "accept": ["1922", "1927"], "why": "British Broadcasting Company 1922; Corporation 1927 — a good answer says which" },
+    "26": { "accept": ["334", "346"], "why": "Sources disagree (Wikidata 334 km, Wikipedia 346 km); ideal answer shows both" }
+  },
+  "nq": "keep only status=verified (8 of 20); the rest are stale or the top search result was the wrong article"
+}
