@@ -494,9 +494,9 @@ export async function resolveQuestion(q, io) {
 
 // The whole typed pipeline, shared by the page and the stand-in runner.
 // io: { first(system, q) -> reply, again(text) -> reply (same conversation), py(code) -> { ok, out, err } }
-export async function typedAnswer(q0, io, { resolve = false, writeUp = true, maxSteps = 3 } = {}) {
+export async function typedAnswer(q0, io, { resolve = false, writeUp = true, maxSteps = 3, onResult = null } = {}) {
   let q = q0;
-  const r = { typed: true, problems: [], repaired: false, steps: [] };
+  const r = { typed: true, problems: [], repaired: false, steps: [], assumptions: [] };
   // 1. Plain-code normalising: number words and clock phrases -> digits (instant, never wrong about what was said).
   const norm = normaliseQuestion(q0);
   if (norm !== q0) { r.normalised = norm; q = norm; }
@@ -506,7 +506,10 @@ export async function typedAnswer(q0, io, { resolve = false, writeUp = true, max
   // Plain code decides whether tools are offered at all (added after Nano, told
   // "ANY question involving numbers", wrote code for 11 of 18 plain questions).
   if (!looksComputable(q)) { r.gated = true; r.reply = await io.first(PROMPT_PLAIN, q); r.code = null; r.final = r.reply; return r; }
-  r.reply = await io.first(PROMPT_TYPED, q + (r.resolved && r.resolved.assumptions.length ? '\n(Assumptions: ' + r.resolved.assumptions.join('; ') + ')' : ''));
+  // Stated, not silent: an all-numbers date is read the UK way (a probe showed "3/4/2027" read as 4 March every time, unflagged).
+  if (/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(q)) r.assumptions.push('Dates like 3/4/2027 are read as day/month/year (UK).');
+  if (r.resolved) r.assumptions.push(...r.resolved.assumptions);
+  r.reply = await io.first(PROMPT_TYPED, q + (r.assumptions.length ? '\n(Assumptions: ' + r.assumptions.join(' ') + ')' : ''));
   r.code = extractPython(r.reply);
   if (!r.code && looksComputable(q)) {
     r.nudged = true;
@@ -549,6 +552,7 @@ export async function typedAnswer(q0, io, { resolve = false, writeUp = true, max
       const m = run.ok && /__ANSWER__=(.*)$/m.exec(run.out);
       if (m) {
         r.out = r.final = m[1].trim(); r.checks = attempt ? 'passed on retry' : 'passed';
+        if (onResult) { try { onResult(r.out); } catch {} }
         // 4. Write-up: the model phrases the answer; plain code checks the result is in it, unchanged, and nothing else numeric was added.
         if (writeUp && io.writeup) {
           try {

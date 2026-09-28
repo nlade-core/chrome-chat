@@ -218,6 +218,13 @@
   .md pre code { background: none; padding: 0; }
 
   .msg-timing { color: var(--muted); font-size: 0.7rem; margin-top: 0.4rem; }
+  .compute-box { margin-top: 0.5rem; padding: 0.45rem 0.7rem; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); border-radius: 6px; font-size: 0.85rem; }
+  .compute-box.warn { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 9%, transparent); }
+  .compute-box code { font-weight: 600; }
+  .compute-box details { margin-top: 0.35rem; }
+  .compute-box summary { cursor: pointer; color: var(--muted); }
+  .compute-box pre { white-space: pre-wrap; overflow-wrap: anywhere; background: color-mix(in srgb, var(--fg) 6%, transparent); border-radius: 6px; padding: 0.5rem; margin: 0.3rem 0; font-size: 0.8rem; }
+  .compute-box .compute-meta { color: var(--muted); margin-top: 0.25rem; }
   .msg-actions { margin-top: 0.5rem; display: flex; gap: 0.4rem; }
   .msg-actions .icon-btn {
     background: transparent;
@@ -337,7 +344,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · <a href="?tour" id="tour-link">Take the tour</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-27 18:26 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 10:30 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -350,6 +357,8 @@
         <p><strong>Offline Wikipedia (optional):</strong> connect a Kiwix <code>.zim</code> file (from <a href="https://library.kiwix.org" target="_blank" rel="noopener">library.kiwix.org</a>) and <code>/wiki:offline &lt;question&gt;</code> answers from it. It's read in place on this device by Kiwix's own reader running inside this page -- never uploaded, never copied -- so the whole question-and-answer round trip needs no network at all.
           <span id="offline-status" style="display:block;margin-top:0.35rem;">Not connected.</span>
           <span style="display:flex;gap:0.5rem;margin-top:0.4rem;"><button type="button" id="offline-connect-btn" class="icon-btn">Connect a .zim file…</button><button type="button" id="offline-disconnect-btn" class="icon-btn" style="display:none;">Disconnect</button></span></p>
+        <p><strong>Sums, dates and letters:</strong> for things a small model gets wrong in its head — arithmetic, percentages, dates, clock times, counting letters — it writes a few lines of Python instead, which run <em>in this page</em>, in a sandbox with no network access. Plain code checks the working before you see it: the code has to compute from your question's own values (a typed-in answer is sent back), the answer has to have the right type (a date, a whole number…), and the model's sentence must contain the computed result unchanged. Every such answer has <em>Show the working</em>. The Python runtime (Pyodide, about 12 MB) downloads once from cdn.jsdelivr.net the first time it's needed — no question or data is sent with it. <strong>Not checked:</strong> whether the code understood the question (a logic slip can still give a wrong answer — that's why the code is shown); anything that needs live data; and follow-ups that refer back to an earlier message ("and at 20%?"), which go to the normal chat. Dates written like 3/4/2027 are read as day/month and the answer says so. On unseen questions it took the model from 61% to 87% right — <a href="lab/findings.html" target="_blank" rel="noopener">how it was measured</a>.
+          <label style="display:block;margin-top:0.35rem;"><input type="checkbox" id="compute-toggle"> Use Python for sums and dates</label></p>
         <p><strong>Requirements:</strong> branded Google Chrome (desktop), a recent enough version to support the on-device Prompt API. It won't work in other browsers, or in plain Chromium.</p>
         <p><strong>Fully open source</strong> (GPL-3.0) — every line of what's running is in the public repository linked in the sidebar, nothing hidden. Offline Wikipedia uses <a href="https://github.com/openzim/javascript-libzim" target="_blank" rel="noopener">Kiwix's libzim</a> (GPL-3.0); Wikipedia text is CC BY-SA 4.0.</p>
       </div>
@@ -405,6 +414,9 @@
 
   <script type="module">
     import { marked } from 'https://cdn.jsdelivr.net/npm/marked@18.0.11/lib/marked.esm.js';
+    // The compute path's gate and question normaliser (plain code, same origin, ~30 KB);
+    // the runtime itself -- Python worker, model calls -- loads only when first needed.
+    import { looksComputable, normaliseQuestion } from './lab/compute-core.js';
 
     const statusPill = document.getElementById('status-pill');
     const newChatBtn = document.getElementById('new-chat-btn');
@@ -440,7 +452,10 @@
     const sidebar = document.getElementById('sidebar');
     const sidebarOverlay = document.getElementById('sidebar-overlay');
 
-    const SYSTEM_PROMPT = 'You are a helpful, concise assistant.';
+    // Today's date, so "how many days until..." isn't answered from a training-era
+    // guess: asked plainly, Nano said there were "23 days until Christmas Day 2024".
+    // It tells the model what day it is -- not what has happened since it was trained.
+    const systemPrompt = () => 'You are a helpful, concise assistant. Today is ' + new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + '.';
     const PREFIX = 'chrome-chat:';
     const INDEX_KEY = PREFIX + 'index';
     const threadKey = (id) => PREFIX + 'thread:' + id;
@@ -750,7 +765,7 @@
       chatNote.textContent = 'Preparing the model…';
       const startedAt = performance.now();
       const promise = LanguageModel.create({
-        initialPrompts: [{ role: 'system', content: SYSTEM_PROMPT }],
+        initialPrompts: [{ role: 'system', content: systemPrompt() }],
         ...chatSessionIO(),
       }).then((session) => ({ session, createMs: Math.round(performance.now() - startedAt) }));
       prewarm = { promise };
@@ -921,7 +936,7 @@
                 sessionPart +
               '</div>'
             : '';
-          row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + timingHtml + actions + '</div>';
+          row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + computeHtml(m) + timingHtml + actions + '</div>';
         }
         chatLog.appendChild(row);
       });
@@ -1613,7 +1628,7 @@
       for (let i = msgs.length - 1; i >= 0; i--) {
         if (msgs[i].role === 'divider') { startIdx = i + 1; priorSummary = msgs[i].content; break; }
       }
-      const prompts = [{ role: 'system', content: SYSTEM_PROMPT }];
+      const prompts = [{ role: 'system', content: systemPrompt() }];
       if (priorSummary) prompts.push({ role: 'system', content: 'Summary of the conversation so far: ' + priorSummary });
       for (let i = startIdx; i < msgs.length; i++) {
         const m = msgs[i];
@@ -3192,6 +3207,7 @@
     chatInput.addEventListener('input', () => {
       clearTimeout(urlContextDebounceTimer);
       urlContextDebounceTimer = setTimeout(maybeFetchUrlContext, 500);
+      if (computeEnabled && !computeWarmed && shouldCompute(chatInput.value.trim(), null)) { computeWarmed = true; loadCompute().then((rt) => rt.startPython()).catch(() => { computeWarmed = false; }); }
     });
 
     // Shared by a fresh send, edit-and-resend, fork, and regenerate -- takes
@@ -3396,6 +3412,96 @@
       document.dispatchEvent(new CustomEvent('chat:reply', { detail: { text, threadId, reply: last && last.role === 'assistant' ? last.content : '', label: urlContext ? urlContext.label : null, error: replyError } }));
     }
 
+    // ---------------------------------------------------------------- compute path
+    // Sums, dates and letter counts go through Python (lab/compute-runtime.js,
+    // measured in lab/compute.html): the model writes the code, the page runs it
+    // in a network-locked worker, plain code checks it, and the answer shows its
+    // working. Plain code decides which messages qualify (looksComputable); a
+    // follow-up that refers back to earlier turns stays in the normal chat, which
+    // has the context -- the compute path sees only the one message.
+    let computeEnabled = true;
+    try { computeEnabled = localStorage.getItem('chrome-chat-compute') !== 'off'; } catch {}
+    const computeToggle = document.getElementById('compute-toggle');
+    computeToggle.checked = computeEnabled;
+    computeToggle.addEventListener('change', () => { computeEnabled = computeToggle.checked; try { localStorage.setItem('chrome-chat-compute', computeEnabled ? 'on' : 'off'); } catch {} });
+    let computeRuntime = null, computeWarmed = false;
+    const loadCompute = () => computeRuntime || (computeRuntime = import('./lab/compute-runtime.js').catch((e) => { computeRuntime = null; throw e; }));
+    const REFERS_BACK = /^\s*(and|so|then|but|what about|how about)\b|\b(it|that|those|these|them|same|instead|previous|above|again)\b/i;
+    function shouldCompute(text, conv) {
+      if (!computeEnabled || !text || parseWikiCommand(text) || detectUrlSource(text)) return false;
+      if (!looksComputable(normaliseQuestion(text))) return false;
+      if (conv && conv.messages.length && REFERS_BACK.test(text)) return false;
+      return true;
+    }
+    async function sendCompute(text) {
+      let threadId = activeThreadId;
+      if (threadId === null) {
+        threadId = crypto.randomUUID();
+        activeThreadId = threadId;
+        conversations.set(threadId, { messages: [], session: null, streaming: false, abortController: null, forkMeta: null });
+      }
+      const conv = conversations.get(threadId);
+      const isShown = () => activeThreadId === threadId;
+      conv.messages.push({ role: 'user', content: text });
+      persistThread(threadId);
+      const msg = { role: 'assistant', content: '', compute: { stage: 'Working it out…' } };
+      conv.messages.push(msg);
+      conv.streaming = true;
+      if (isShown()) { chatSendBtn.disabled = true; stickToBottom = true; chatNote.textContent = 'Working it out with Python…'; renderChat(); }
+      renderThreadList();
+      const startedAt = performance.now();
+      let r = null, reason = null;
+      try {
+        const rt = await loadCompute();
+        r = await rt.computeAnswer(text, {
+          onStage: (st) => { if (msg.compute) msg.compute.stage = st; if (isShown()) { chatNote.textContent = st; renderChat(); } },
+          onResult: (v) => { msg.compute.result = v; msg.content = 'Computed: **' + v + '**'; if (isShown()) renderChat(); },
+          onDownload: (p) => { if (isShown()) chatNote.textContent = 'Downloading the model… ' + Math.round(p * 100) + '%'; },
+        });
+      } catch (e) { reason = e.message; }
+      const c = msg.compute;
+      delete c.stage;
+      if (r && r.out != null) {
+        msg.content = r.writeup || ('The answer is ' + r.out + '.');
+        Object.assign(c, { result: r.out, code: r.code, steps: r.steps || [], repaired: !!r.repaired, normalised: r.normalised || null,
+          assumptions: r.assumptions || [], writeupChecked: !!r.writeup, writeupProblem: r.writeupProblem || null });
+      } else if (r && r.gated) {
+        msg.content = r.reply; delete msg.compute;
+      } else {
+        // No checked result: say so, and give the model's own answer, flagged as unchecked.
+        c.unverified = 'Python couldn’t produce a checked answer' + ((reason || (r && r.err)) ? ' (' + (reason || r.err) + ')' : '') + ', so this is the model’s own answer — unchecked. Treat any numbers with care.';
+        try { msg.content = await (await loadCompute()).oneShot(systemPrompt(), text); }
+        catch (e) { msg.content = 'Sorry — no answer (' + e.message + ').'; }
+      }
+      msg.timingMs = { total: Math.round(performance.now() - startedAt) };
+      conv.streaming = false;
+      // The chat session hasn't seen this exchange: rebuild it from the transcript on the next message.
+      if (conv.session) { try { conv.session.destroy(); } catch {} conv.session = null; }
+      persistThread(threadId);
+      if (isShown()) { chatNote.textContent = ''; chatSendBtn.disabled = !promptOk; renderChat(); }
+      renderThreadList();
+      if (conv.messages.length === 2) maybeGenerateTitle(threadId, text);
+      document.dispatchEvent(new CustomEvent('chat:reply', { detail: { text, threadId, reply: msg.content, label: null, error: null } }));
+    }
+    function computeHtml(m) {
+      const c = m.compute;
+      if (!c) return '';
+      if (c.stage) return '<div class="compute-box">⏳ ' + escapeHtml(c.stage) + '</div>';
+      if (c.unverified) return '<div class="compute-box warn">⚠ ' + escapeHtml(c.unverified) + '</div>';
+      const checked = ['the code computes from the question’s own values (a typed-in answer is sent back)', 'the answer has the expected type and format',
+        c.writeupChecked ? 'the sentence contains the computed result unchanged and adds no other numbers' : null].filter(Boolean);
+      return '<div class="compute-box"><div>🐍 Computed with Python: <code>' + escapeHtml(String(c.result)) + '</code>'
+        + (c.writeupProblem ? ' <span class="compute-meta">(the model’s sentence didn’t match the result, so it isn’t shown)</span>' : '') + '</div>'
+        + (c.assumptions && c.assumptions.length ? '<div class="compute-meta">Assumed: ' + escapeHtml(c.assumptions.join(' ')) + '</div>' : '')
+        + '<details><summary>Show the working</summary>'
+        + (c.normalised ? '<div class="compute-meta">Read as: ' + escapeHtml(c.normalised) + '</div>' : '')
+        + (c.steps || []).map((st, k) => '<div class="compute-meta">Step ' + (k + 1) + ' printed:</div><pre>' + escapeHtml(st.code) + '\n→ ' + escapeHtml(st.out) + '</pre>').join('')
+        + '<div class="compute-meta">Code' + (c.repaired ? ' (after a check sent back an earlier attempt)' : '') + ':</div><pre>' + escapeHtml(c.code || '') + '</pre>'
+        + '<div class="compute-meta">Checked: ' + checked.map(escapeHtml).join('; ') + '.</div>'
+        + '<div class="compute-meta">Not checked: whether the code understood the question — read it if the answer matters; anything needing live data.</div>'
+        + '</details></div>';
+    }
+
     let sendChatGuardActive = false; // blocks a re-entrant Enter/click while resolving a pending link/slash-command below, so a fast double-Enter can't race in
     async function sendChat() {
       const text = chatInput.value.trim();
@@ -3439,6 +3545,7 @@
       attachmentChip.style.display = 'none';
       clearUrlContext();
       followupDismissed = false;
+      if (!attachment && !urlContext && shouldCompute(text, activeThreadId !== null ? conversations.get(activeThreadId) : null)) { await sendCompute(text); return; }
       await sendText(text, attachment, null, undefined, urlContext);
     }
 
