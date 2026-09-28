@@ -344,7 +344,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · <a href="?tour" id="tour-link">Take the tour</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 11:05 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 12:10 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -416,7 +416,7 @@
     import { marked } from 'https://cdn.jsdelivr.net/npm/marked@18.0.11/lib/marked.esm.js';
     // The compute path's gate and question normaliser (plain code, same origin, ~30 KB);
     // the runtime itself -- Python worker, model calls -- loads only when first needed.
-    import { looksComputable, normaliseQuestion } from './lab/compute-core.js';
+    import { looksComputable, normaliseQuestion, todayText } from './lab/compute-core.js';
 
     const statusPill = document.getElementById('status-pill');
     const newChatBtn = document.getElementById('new-chat-btn');
@@ -3399,7 +3399,10 @@
         }
         const content = [];
         if (urlContext) content.push({ type: 'text', value: urlContextPreamble(urlContext, text) });
-        if (text) content.push({ type: 'text', value: urlContext ? modelFacingText(text) : text });
+        // The date goes in the message itself when it talks about time: Nano ignored it in the
+        // system prompt ("Today is Tuesday, May 14, 2024") -- text in the current turn is followed far more reliably.
+        const dated = !urlContext && text && /\b(today|tomorrow|yesterday|tonight|now|date|day|days|week|month|year|years|ago|until|till|current|currently|latest|recent|this (week|month|year))\b/i.test(text);
+        if (text) content.push({ type: 'text', value: (urlContext ? modelFacingText(text) : text) + (dated ? '\n(Today is ' + todayText() + '.)' : '') });
         if (modelAttachment) content.push({ type: modelAttachment.type, value: modelAttachment.file });
         await streamReply(threadId, [{ role: 'user', content }], sessionTiming);
       } catch (e) {

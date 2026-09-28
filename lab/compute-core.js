@@ -411,7 +411,17 @@ function wordsToNumber(run) {
   }
   return total + cur;
 }
-export function normaliseQuestion(q) {
+// Questions relative to today ("how many days until Christmas?") get today's date
+// attached, in plain code: in the chat, Nano ignored the date in its system prompt
+// and answered "Today is Tuesday, May 14, 2024. There are 234 days until Christmas."
+// Only with a date-arithmetic cue too, so "who is currently president?" is left alone.
+const RELATIVE = /\b(today|tomorrow|yesterday|tonight|now|this (year|month|week)|next (week|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|last (week|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|until|till|'til|til|ago|from now|how old)\b/i;
+const DATE_Q = /\bhow (many|long|old)\b|\bwhat (date|day)\b|\bwhich (date|day)\b|\bwhen\b|\bwhat day of the week\b/i;
+export const todayText = (now = new Date()) => now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).replace(',', '')
+  + ' (' + now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0') + ')';
+export const needsToday = (q) => RELATIVE.test(q) && DATE_Q.test(q) && !/\(Today is /.test(q);
+export function normaliseQuestion(q, now = new Date()) {
+  if (needsToday(q)) q = q.replace(/\s*$/, '') + ' (Today is ' + todayText(now) + '.)';
   if (!CUE.test(q)) return q;
   let s = q.replace(/\b(half past|quarter past|quarter to)\s+(\w+)(\s+in the (morning|afternoon|evening)|\s*(a\.?m\.?|p\.?m\.?)(?![a-z]))?/gi, (m, kind, hw, _x, part, ap) => {
     let h = hw.toLowerCase() in SMALL ? SMALL[hw.toLowerCase()] : /^\d{1,2}$/.test(hw) ? Number(hw) : null;
@@ -518,6 +528,17 @@ export async function typedAnswer(q0, io, { resolve = false, writeUp = true, max
     r.code = extractPython(more);
   }
   if (!r.code) { r.final = r.reply; return r; }
+  // 4. Write-up: the model phrases the answer; plain code checks the result is in it, unchanged, and nothing else numeric was added.
+  const finish = async () => {
+    if (onResult) { try { onResult(r.out); } catch {} }
+    if (!writeUp || !io.writeup) return;
+    try {
+      const text = 'Question: ' + q + '\nComputed result: ' + r.out + (r.steps.length ? '\nIntermediate results: ' + r.steps.map((x) => x.out.split('\n').slice(0, 3).join('; ')).join(' | ') : '');
+      const sentence = String(await io.writeup(PROMPT_WRITEUP, text) || '').trim();
+      const bad = checkWriteup(r.out, sentence, q);
+      if (bad) { r.writeupRejected = sentence; r.writeupProblem = bad; } else r.writeup = sentence;
+    } catch (e) { r.writeupProblem = 'write-up failed: ' + String(e.message || e).slice(0, 80); }
+  };
   const TRIES = 3; // first try + 2 retries
   let attempt = 0;
   while (attempt < TRIES) {
@@ -537,7 +558,22 @@ export async function typedAnswer(q0, io, { resolve = false, writeUp = true, max
         if (!c) { // it answered in words after the step: ask once for the final code (the train question stopped here, 0/3)
           const fin = await io.again('Now reply with only a ```python block that defines def answer() computing the final result from the question\'s values.');
           c = extractPython(fin);
-          if (!c) { r.problems.push('no final code after an intermediate step'); break; }
+          if (!c) {
+            // It computed the value in a printing step and then stopped: use that printed value,
+            // if the step's code really computed it (not print(88)), through the same type check.
+            // (Added after "How many days until Christmas?" printed 88 correctly and then gave no final code.)
+            const step = r.steps[r.steps.length - 1];
+            const val = step.out.split('\n').filter(Boolean).pop() || '';
+            const computed = /[-+*\/%]|\w\(/.test(step.code.replace(/print\s*\(/g, '')) && !/^\s*print\(\s*['"]?[-\d.,:\/ ]+['"]?\s*\)\s*$/.test(step.code.trim());
+            if (val && computed && step.out.split('\n').filter(Boolean).length <= 3) {
+              r.type = r.inferred || 'auto';
+              const lit = /^-?\d+(\.\d+)?$/.test(val) ? val : JSON.stringify(val);
+              const run = await io.py('def answer():\n    return ' + lit + '\n' + pyWrapper(r.type, ''));
+              const m = run.ok && /__ANSWER__=(.*)$/m.exec(run.out);
+              if (m) { r.code = step.code; r.fromStep = true; r.out = r.final = m[1].trim(); r.checks = 'value printed by a computing step'; await finish(); return r; }
+            }
+            r.problems.push('no final code after an intermediate step'); break;
+          }
         }
         r.code = c;
         continue; // a step is not a retry
@@ -552,16 +588,7 @@ export async function typedAnswer(q0, io, { resolve = false, writeUp = true, max
       const m = run.ok && /__ANSWER__=(.*)$/m.exec(run.out);
       if (m) {
         r.out = r.final = m[1].trim(); r.checks = attempt ? 'passed on retry' : 'passed';
-        if (onResult) { try { onResult(r.out); } catch {} }
-        // 4. Write-up: the model phrases the answer; plain code checks the result is in it, unchanged, and nothing else numeric was added.
-        if (writeUp && io.writeup) {
-          try {
-            const text = 'Question: ' + q + '\nComputed result: ' + r.out + (r.steps.length ? '\nIntermediate results: ' + r.steps.map((x) => x.out.split('\n').slice(0, 3).join('; ')).join(' | ') : '');
-            const sentence = String(await io.writeup(PROMPT_WRITEUP, text) || '').trim();
-            const bad = checkWriteup(r.out, sentence, q);
-            if (bad) { r.writeupRejected = sentence; r.writeupProblem = bad; } else r.writeup = sentence;
-          } catch (e) { r.writeupProblem = 'write-up failed: ' + String(e.message || e).slice(0, 80); }
-        }
+        await finish();
         return r;
       }
       // The reason is on the "TypeError: ANSWER CHECK: ..." line -- not the traceback's copy of the raise statement.
