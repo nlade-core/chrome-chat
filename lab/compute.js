@@ -86,6 +86,7 @@ async function resolveCall(system, text, schema) {
   let s;
   try {
     s = await Promise.race([gaveUp, LanguageModel.create({ initialPrompts: [{ role: 'system', content: system }], ...IO, signal: ctl.signal })]);
+    if (!schema) return await Promise.race([gaveUp, s.prompt(text, { signal: ctl.signal })]); // write-up: plain text
     try { return await Promise.race([gaveUp, s.prompt(text, { responseConstraint: schema, signal: ctl.signal })]); }
     catch (e) { if (ctl.signal.aborted) throw e; return await Promise.race([gaveUp, s.prompt(text + '\nReply with only the JSON.', { signal: ctl.signal })]); }
   } finally { clearTimeout(timer); try { s && s.destroy(); } catch {} }
@@ -93,16 +94,17 @@ async function resolveCall(system, text, schema) {
 
 // Typed answers: the shared pipeline in compute-core.js, run on Nano + Pyodide.
 async function withTyped(q, onText) {
-  let session = null, modelMs = 0, pyMs = 0;
+  let session = null, modelMs = 0, pyMs = 0, writeupMs = 0;
   const timed = async (p) => { const t0 = performance.now(); try { return await p; } finally { modelMs += Math.round(performance.now() - t0); } };
   try {
     const r = await typedAnswer(q, {
       first: async (system, text) => { const a = await ask(system, text, onText); session = a.session; modelMs += a.ms; return a.reply; },
       resolve: (system, text, schema) => timed(resolveCall(system, text, schema)),
+      writeup: async (system, text) => { const t0 = performance.now(); try { return await resolveCall(system, text); } finally { writeupMs += Math.round(performance.now() - t0); } },
       again: (text) => timed(followUp(session, text)),
       py: async (code) => { const x = await runPython(code); pyMs += x.ms || 0; return x; },
-    }, { resolve: $('resolve').checked });
-    return Object.assign(r, { modelMs, pyMs });
+    }, { resolve: $('resolve').checked, writeUp: $('writeup').checked });
+    return Object.assign(r, { modelMs, pyMs, writeupMs });
   } finally { try { session && session.destroy(); } catch {} }
 }
 
@@ -181,6 +183,10 @@ function showDetail(c) {
     box.append(h('h4', 'With tools, run ' + (i + 1) + ' — ' + (x.pass ? 'pass' : 'fail') + (x.repaired ? ' (repaired)' : '')));
     box.append(h('pre', x.reply));
     if (x.code) box.append(h('p', 'Ran:', 'muted'), h('pre', x.code2 || x.code), h('p', 'Output: ' + (x.out != null ? x.out : '(none)') + (x.err ? ' · error: ' + x.err : ''), 'muted'));
+    if (x.normalised) box.append(h('p', 'Read as (plain code): ' + x.normalised, 'muted'));
+    (x.steps || []).forEach((st, k) => box.append(h('p', 'Step ' + (k + 1) + ' printed:', 'muted'), h('pre', st.code + '\n→ ' + st.out)));
+    if (x.writeup) box.append(h('p', 'Answer: ' + x.writeup + '  (write-up checked: the result appears unchanged)', 'ok'));
+    if (x.writeupProblem) box.append(h('p', 'Write-up rejected (' + x.writeupProblem + '): ' + (x.writeupRejected || ''), 'bad'));
     if (x.resolved) box.append(h('p', 'Read as: ' + x.resolved.question + (x.resolved.assumptions.length ? ' · assuming ' + x.resolved.assumptions.join('; ') : '') + (x.resolved.used ? '' : ' (original kept: ' + (x.resolved.reason || 'unchanged') + ')'), 'muted'));
     if (x.typed && x.code) box.append(h('p', 'Type: ' + x.type + ' (inferred ' + (x.inferred || '–') + ', declared ' + (x.declared || '–') + ')' + (x.typeMismatch ? ' — MISMATCH' : '') + (x.problems.length ? ' · rejected: ' + x.problems.join(' | ') : ''), 'muted'));
   });
@@ -195,6 +201,10 @@ function totals() {
     usedCodeWhenNeeded: sum((c) => c.code, (r) => !!r.code), falseTriggers: sum((c) => !c.code, (r) => !!r.code),
     directTools: sum((c) => !c.code, (r) => r.pass), directPlain: sumP((c) => !c.code),
     repaired: sum(() => true, (r) => r.repaired),
+    writeupsKept: sum(() => true, (r) => !!r.writeup) + ' (rejected ' + sum(() => true, (r) => !!r.writeupProblem) + ')',
+    multiStep: sum(() => true, (r) => r.steps && r.steps.length > 0),
+    avgMs: (() => { const t = all.flatMap((x) => x.tools).filter((r) => r.modelMs); return t.length ? Math.round(t.reduce((a, r) => a + r.modelMs + (r.writeupMs || 0), 0) / t.length) : 0; })(),
+    avgWriteupMs: (() => { const t = all.flatMap((x) => x.tools).filter((r) => r.writeupMs); return t.length ? Math.round(t.reduce((a, r) => a + r.writeupMs, 0) / t.length) : 0; })(),
   };
 }
 function renderTotals() {
@@ -239,7 +249,7 @@ async function runCases(list, resume = false) {
 function report() {
   const t = totals();
   const lines = ['compute-lab results · ' + new Date().toISOString().slice(0, 16) + ' · ' + (navigator.userAgentData ? navigator.userAgentData.brands.map((b) => b.brand + ' ' + b.version).join(', ') : navigator.userAgent),
-    'Mode: ' + ($('typed').checked ? 'TYPED' : 'plain code') + ' · resolve: ' + ($('resolve').checked ? 'on' : 'off') + ' · tool prompt: ' + ($('strict').checked ? 'strict' : 'lenient') + ' · nudge: ' + ($('nudge').checked ? 'on' : 'off') + ' · runs each: ' + $('runs').value + ' · question set: ' + $('set').value + ' · Python ' + (pyInfo ? pyInfo.version + ', loaded in ' + pyInfo.ms + ' ms' : 'not loaded') + ' · requests after Python loaded: ' + netCount(),
+    'Mode: ' + ($('typed').checked ? 'TYPED' : 'plain code') + ' · model rewrite: ' + ($('resolve').checked ? 'on' : 'off') + ' · write-up: ' + ($('writeup').checked ? 'on' : 'off') + ' · tool prompt: ' + ($('strict').checked ? 'strict' : 'lenient') + ' · nudge: ' + ($('nudge').checked ? 'on' : 'off') + ' · runs each: ' + $('runs').value + ' · question set: ' + $('set').value + ' · Python ' + (pyInfo ? pyInfo.version + ', loaded in ' + pyInfo.ms + ' ms' : 'not loaded') + ' · requests after Python loaded: ' + netCount(),
     'TOTALS ' + JSON.stringify(t), '',
     'id | kind | with tools pass | used code | repaired | plain pass | model ms | first output'];
   for (const c of CASES) {
@@ -252,7 +262,7 @@ function report() {
   lines.push('', 'FAILURES (reply, code, output)');
   for (const c of CASES) {
     const r = results.get(c.id); if (!r) continue;
-    r.tools.forEach((x, i) => { if (!x.pass || x.repaired || x.typeMismatch || (x.resolved && x.resolved.used)) lines.push('#' + c.id + ' tools run ' + (i + 1) + (x.pass ? ' (passed)' : '') + ': reply=' + JSON.stringify((x.reply || '').slice(0, 400)) + ' code=' + JSON.stringify(x.code2 || x.code || null) + ' out=' + JSON.stringify(x.out) + (x.err ? ' err=' + JSON.stringify(x.err) : '') + (x.resolved ? ' readAs=' + JSON.stringify(x.resolved.question) + (x.resolved.used ? '' : ' (kept original: ' + (x.resolved.reason || 'unchanged') + ')' + (x.resolved.rewrite ? ' rejectedRewrite=' + JSON.stringify(x.resolved.rewrite) : x.resolved.raw ? ' rawRewrite=' + JSON.stringify(String(x.resolved.raw).slice(0, 200)) : '')) + (x.resolved.assumptions.length ? ' assumptions=' + JSON.stringify(x.resolved.assumptions) : '') : '') + (x.typed ? ' type=' + x.type + ' inferred=' + x.inferred + ' declared=' + x.declared + (x.problems.length ? ' rejected=' + JSON.stringify(x.problems) : '') : '')); });
+    r.tools.forEach((x, i) => { if (!x.pass || x.repaired || x.typeMismatch || (x.resolved && x.resolved.used) || x.writeupProblem || (x.steps && x.steps.length) || x.normalised) lines.push('#' + c.id + ' tools run ' + (i + 1) + (x.pass ? ' (passed)' : '') + ': reply=' + JSON.stringify((x.reply || '').slice(0, 400)) + ' code=' + JSON.stringify(x.code2 || x.code || null) + ' out=' + JSON.stringify(x.out) + (x.err ? ' err=' + JSON.stringify(x.err) : '') + (x.resolved ? ' readAs=' + JSON.stringify(x.resolved.question) + (x.resolved.used ? '' : ' (kept original: ' + (x.resolved.reason || 'unchanged') + ')' + (x.resolved.rewrite ? ' rejectedRewrite=' + JSON.stringify(x.resolved.rewrite) : x.resolved.raw ? ' rawRewrite=' + JSON.stringify(String(x.resolved.raw).slice(0, 200)) : '')) + (x.resolved.assumptions.length ? ' assumptions=' + JSON.stringify(x.resolved.assumptions) : '') : '') + (x.normalised ? ' normalised=' + JSON.stringify(x.normalised) : '') + (x.steps && x.steps.length ? ' steps=' + JSON.stringify(x.steps) : '') + (x.writeup ? ' writeup=' + JSON.stringify(x.writeup) : '') + (x.writeupProblem ? ' writeupRejected=' + JSON.stringify(x.writeupProblem + ' :: ' + (x.writeupRejected || '')) : '') + (x.typed ? ' type=' + x.type + ' inferred=' + x.inferred + ' declared=' + x.declared + (x.problems.length ? ' rejected=' + JSON.stringify(x.problems) : '') : '')); });
     r.plain.forEach((x, i) => { if (!x.pass) lines.push('#' + c.id + ' plain run ' + (i + 1) + ': ' + JSON.stringify((x.reply || '').slice(0, 200))); });
   }
   return lines.join('\n');
@@ -282,6 +292,10 @@ $('free-go').onclick = async () => {
   try {
     if (!worker) { $('status').textContent = 'Loading Python…'; await startWorker(); $('py').textContent = 'Python ' + pyInfo.version + ' ready in ' + pyInfo.ms + ' ms'; }
     const x = await withTools(q, (t) => { live.textContent = t; });
+    if (x.writeup) box.prepend(h('p', x.writeup, 'ok'));
+    else if (x.out != null) box.prepend(h('p', 'Result: ' + x.out + (x.writeupProblem ? '  (write-up rejected: ' + x.writeupProblem + ')' : ''), 'ok'));
+    if (x.normalised) box.prepend(h('p', 'Read as: ' + x.normalised, 'muted'));
+    (x.steps || []).forEach((st, k) => box.append(h('p', 'Step ' + (k + 1) + ':', 'muted'), h('pre', st.code + '\n→ ' + st.out)));
     if (x.resolved) box.prepend(h('p', 'Read as: ' + x.resolved.question + (x.resolved.assumptions.length ? ' · assuming ' + x.resolved.assumptions.join('; ') : ''), 'muted'));
     if (x.code) box.append(h('p', 'Ran:', 'muted'), h('pre', x.code2 || x.code), h('p', x.out != null ? 'Output: ' + x.out : 'Error: ' + x.err, x.out != null ? 'ok' : 'bad'));
     $('status').textContent = 'model ' + x.modelMs + ' ms' + (x.code ? ', python ' + x.pyMs + ' ms' : ', no code');

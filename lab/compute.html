@@ -33,13 +33,14 @@
 
   <h2>Run the test set</h2>
   <div class="bar">
-    <label>questions <select id="set"><option value="tune">tuning set (1–29)</option><option value="held">held-out 1 (30–47)</option><option value="held2">held-out 2 (48–62)</option><option value="probe">probe: new problem types (63–73)</option><option value="words">word problems (74–86)</option><option value="messy">messy questions (87–94)</option><option value="all">all 94</option></select></label>
+    <label>questions <select id="set"><option value="tune">tuning set (1–29)</option><option value="held">held-out 1 (30–47)</option><option value="held2">held-out 2 (48–62)</option><option value="probe">probe: new problem types (63–73)</option><option value="words">word problems (74–86)</option><option value="messy">messy questions (87–94)</option><option value="steps">multi-step (95–97)</option><option value="all">all 97</option></select></label>
     <button class="primary" id="run-all">Run set</button>
     <button id="resume" title="Carry on: only the runs each question is still missing">Resume</button>
     <select id="pick"></select><button id="run-one">Run this one</button>
     <label>runs each <select id="runs"><option>1</option><option selected>3</option><option>5</option></select></label>
     <label><input type="checkbox" id="typed" checked> typed answers</label>
-    <label><input type="checkbox" id="resolve" checked> resolve the question first</label>
+    <label><input type="checkbox" id="writeup" checked> write the answer up (checked)</label>
+    <label title="Off by default: on Nano the rewrite mostly failed its own check and cost 2-5 s. Number words and clock phrases are normalised by plain code either way."><input type="checkbox" id="resolve"> model rewrite first (slow)</label>
     <label><input type="checkbox" id="strict" checked> strict tool prompt</label>
     <label><input type="checkbox" id="nudge" checked> nudge if no code</label>
     <label><input type="checkbox" id="do-plain" checked> also ask without tools (baseline)</label>

@@ -1,4 +1,4 @@
-// Usage: node eval/compute.mjs [--model gemma4:e4b] [--runs 3] [--no-plain] [--strict] [--nudge] [--typed] [--set tune|held|held2|probe|words|messy|all] [--resolve]
+// Usage: node eval/compute.mjs [--model gemma4:e4b] [--runs 3] [--no-plain] [--strict] [--nudge] [--typed] [--set tune|held|held2|probe|words|messy|steps|all] [--resolve] [--no-writeup]
 //
 // The compute lab (lab/compute.html) with local stand-ins: Ollama for Gemini
 // Nano (temperature 1, topK 3, hidden reasoning off) and local python3 for
@@ -17,6 +17,8 @@ const TOOLS = process.argv.includes('--strict') ? PROMPT_TOOLS_STRICT : PROMPT_T
 const doNudge = process.argv.includes('--nudge');
 const typed = process.argv.includes('--typed');
 const resolve = process.argv.includes('--resolve');
+const writeUp = !process.argv.includes('--no-writeup');
+const WU = { kept: 0, rejected: 0, steps: 0, ms: [] };
 const set = arg('set', 'tune'); // tune | held | all
 const SET = CASES.filter((c) => set === 'all' || set === c.set);
 
@@ -32,7 +34,8 @@ async function withTools(q) {
       again: async (text) => { msgs.push({ role: 'user', content: text }); const a = await ollamaChat(model, msgs); msgs.push({ role: 'assistant', content: a }); return a; },
       py: async (code) => runPython(code),
       resolve: (system, text, schema) => ollamaChat(model, [{ role: 'system', content: system }, { role: 'user', content: text }], schema),
-    }, { resolve });
+      writeup: async (system, text) => { const t0 = Date.now(); try { return await ollamaChat(model, [{ role: 'system', content: system }, { role: 'user', content: text }]); } finally { WU.ms.push(Date.now() - t0); } },
+    }, { resolve, writeUp });
   }
   const msgs = [{ role: 'system', content: TOOLS }, { role: 'user', content: q }];
   let reply = await ollamaChat(model, msgs);
@@ -63,6 +66,8 @@ for (const c of SET) {
   for (let i = 0; i < runs; i++) {
     const r = await withTools(c.q);
     if (check(c, r.final)) pass++; if (r.code) used++; if (r.repaired) rep++;
+    if (r.writeup) WU.kept++; if (r.writeupProblem) { WU.rejected++; console.error('   write-up rejected #' + c.id + ': ' + r.writeupProblem + ' :: ' + (r.writeupRejected || '').slice(0, 120)); }
+    if (r.steps && r.steps.length) WU.steps++;
     outs.push((r.code ? (r.out ?? 'ERR ' + (r.err || '').split('\n').pop()) : 'direct: ' + r.reply).replace(/\s+/g, ' ').slice(0, 30) + (r.typed && r.problems && r.problems.length ? ' [rej: ' + r.problems.map((x) => x.slice(0, 40)).join(' | ') + ']' : '') + (r.resolved && r.resolved.used ? ' {read as: ' + r.resolved.question.slice(0, 60) + '}' : r.resolved && r.resolved.reason ? ' {kept: ' + r.resolved.reason.slice(0, 40) + '}' : ''));
     if (doPlain && check(c, await ollamaChat(model, [{ role: 'system', content: PROMPT_PLAIN }, { role: 'user', content: c.q + ' Answer briefly.' }]))) plainPass++;
   }
@@ -73,3 +78,4 @@ for (const c of SET) {
 console.log('\ncompute questions: with tools', T.cT + '/' + T.cN, '| plain', T.cP + '/' + T.cN, '| used code when needed', T.used + '/' + T.cN);
 console.log('near-misses:       with tools', T.dT + '/' + T.dN, '| plain', T.dP + '/' + T.dN, '| false triggers (code when not needed)', T.falseTrig + '/' + T.dN);
 console.log('repairs attempted:', T.rep);
+if (typed) console.log('write-ups kept:', WU.kept, '| rejected:', WU.rejected, '| median write-up ms:', WU.ms.length ? WU.ms.sort((a, b) => a - b)[WU.ms.length >> 1] : '-', '| runs that used intermediate steps:', WU.steps);

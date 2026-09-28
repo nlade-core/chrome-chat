@@ -158,7 +158,7 @@ export const PROMPT_PLAIN = 'You are a helpful, concise assistant.';
 // and, if the reply came back without code, asks once more for the code.
 // (Month/weekday names and bare quotes were tried first and nudged the
 // near-misses "Translate "good morning"" and "...moved to thursday" into code.)
-export const looksComputable = (q) => /\d/.test(q) || (/"[^"]+"/.test(q) && /\b(letters?|how many|count|spell|backwards)\b/i.test(q)) // spell/backwards added with case 28
+export const looksComputable = (q) => /\d/.test(q) || (/"[^"]+"/.test(q) && /\b(letters?|leters?|how many|hw many|count|spell|backwards|app?ears?|occurs?|times|tims)\b/i.test(q)) // spell/backwards added with case 28
   || /\b(sort|order|arrange|alphabetical(ly)?)\b/i.test(q); // added after held-out 46 ("Sort these words alphabetically") never got the tool
 export const NUDGE = 'Please answer that with a ```python code block that prints only the final answer, as instructed.';
 export const extractPython = (reply) => (/```(?:python|py)?[ \t]*\n([\s\S]*?)```/i.exec(reply || '') || [])[1] || null;
@@ -192,7 +192,8 @@ export function inferType(q) {
   // Two-part questions (added after the word-problem set: "On what date, and what
   // day of the week", "How much does each get" were forced down to one value).
   // (Widened after the rewrite said "and on what day" / "each person get".)
-  if (/\band (on |at |in )?(what|which|how)\b|\beach( \w+)? (get|gets|pay|pays|receive|receives)\b/i.test(q)) return 'multi';
+  // "each" only counts when two people are named (Anna and Ben); "12 friends ... how much does each pay" is one value.
+  if (/\band (on |at |in |by )?(what|which|how)\b/i.test(q) || (/\beach( \w+)? (get|gets|pay|pays|receive|receives)\b/i.test(q) && /\b[A-Z][a-z]+ and [A-Z][a-z]+\b/.test(q))) return 'multi';
   const dp = /(\d+) decimal places?/i.exec(q);
   if (dp) return 'decimal:' + dp[1];
   if (/day of the week/i.test(q)) return 'weekday';
@@ -254,6 +255,7 @@ export const PROMPT_TYPED = 'You are a helpful, concise assistant. You cannot se
   + 'think briefly, then write one ```python code block (standard library only) that (1) sets ANSWER_TYPE to one of "int", "number", "decimal:N" (N decimal places), "date", "weekday", "time", "text", "multi", '
   + 'and (2) defines def answer(): which computes the result from the question\'s own values and returns it (an int, float, datetime.date or str; if the question asks for more than one thing, a dict such as {"Anna": 60, "Ben": 40}). '
   + 'Use only the numbers that matter and ignore irrelevant details. '
+  + 'If you need to see an intermediate result before finishing, you may first write code that prints it (no answer() yet): you will be shown the output and can continue. '
   + 'Do not print anything: the code will be run, checked and formatted for you. If the question needs no calculation, answer it directly and briefly, with no code.';
 export const NUDGE_TYPED = 'Please answer that with a ```python code block that sets ANSWER_TYPE and defines def answer(), as instructed.';
 
@@ -389,6 +391,73 @@ export function tidyCode(code) {
   return 'import datetime, math, calendar\n' + lines.map((l) => l.slice(Math.min(ind, l.match(/^ */)[0].length))).join('\n');
 }
 
+// ------------------------------------------------------------------ normalising (plain code)
+// Number words and clock phrases -> digits, only when the question has a
+// calculation cue (so "name two capitals" is left alone and never gated into code).
+const SMALL = { zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+  thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40,
+  fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+const SCALE = { hundred: 100, thousand: 1000, million: 1000000 };
+const NUMWORD = '(?:' + [...Object.keys(SMALL), ...Object.keys(SCALE)].join('|') + ')';
+const NUMRUN = new RegExp('\\b' + NUMWORD + '(?:(?:[\\s-]+and[\\s-]+|[\\s-]+)' + NUMWORD + ')*\\b', 'gi');
+const CUE = /\b(plus|minus|times|divided|multiplied|percent|share|shared|split|each|total|how (many|much)|altogether|left|remain\w*|average|sum|cost\w*|pay\w*|days?|hours?|minutes?|arrive|leave|when|what time|squared|cubed)\b/i;
+function wordsToNumber(run) {
+  let total = 0, cur = 0;
+  for (const w of run.toLowerCase().split(/[\s-]+/)) {
+    if (w === 'and') continue;
+    if (w in SMALL) cur += SMALL[w];
+    else if (w === 'hundred') cur = (cur || 1) * 100;
+    else { total += (cur || 1) * SCALE[w]; cur = 0; }
+  }
+  return total + cur;
+}
+export function normaliseQuestion(q) {
+  if (!CUE.test(q)) return q;
+  let s = q.replace(/\b(half past|quarter past|quarter to)\s+(\w+)(\s+in the (morning|afternoon|evening)|\s*(a\.?m\.?|p\.?m\.?)(?![a-z]))?/gi, (m, kind, hw, _x, part, ap) => {
+    let h = hw.toLowerCase() in SMALL ? SMALL[hw.toLowerCase()] : /^\d{1,2}$/.test(hw) ? Number(hw) : null;
+    if (h == null || h < 1 || h > 12) return m;
+    const mins = /half/i.test(kind) ? '30' : /past/i.test(kind) ? '15' : '45';
+    if (/to/i.test(kind)) h = h === 1 ? 12 : h - 1;
+    if ((/afternoon|evening/i.test(part || '') || /^p/i.test(ap || '')) && h < 12) h += 12;
+    return String(h).padStart(2, '0') + ':' + mins;
+  });
+  s = s.replace(NUMRUN, (m) => (/^one$/i.test(m.trim()) ? m : String(wordsToNumber(m)))); // a lone "one" stays ("one tap fills...")
+  s = s.replace(/(\d)\s*percent\b/gi, '$1%');
+  return s;
+}
+
+// ------------------------------------------------------------------ write-up
+export const PROMPT_WRITEUP = 'You write the final answer to the user\'s question in one or two short, plain sentences. '
+  + 'A computer has already worked out the result: use it exactly as given (you may add units, a currency sign or words from the question), '
+  + 'and do not recalculate, round or change it. Do not add any other numbers.';
+// Every part of the computed result must appear, unchanged, and every number in
+// the sentence must come from the result or the question. Returns a problem or null.
+export function checkWriteup(result, sentence, question) {
+  if (!sentence) return 'empty';
+  if (sentence.length > 600) return 'too long';
+  const clean = (x) => String(x).toLowerCase().replace(/(\d),(?=\d{3}\b)/g, '$1').replace(/£/g, '');
+  const S = clean(sentence);
+  const numsOf = (x) => (clean(x).match(/\d+(?:\.\d+)?/g) || []).map(Number);
+  const sNums = numsOf(sentence);
+  const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+  const parts = /: /.test(result) ? result.split(/,\s*(?=[^,:]+: )/).map((p) => p.split(': ').slice(1).join(': ')) : result.split(/,\s*/);
+  for (const part of parts.map((p) => p.trim()).filter(Boolean)) {
+    const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(part);
+    if (iso) {
+      const [y, m, d] = [Number(iso[1]), Number(iso[2]), Number(iso[3])];
+      if (!(S.includes(part) || (S.includes(MONTHS[m - 1]) && sNums.includes(d) && sNums.includes(y)))) return 'result date ' + part + ' not in the sentence';
+    } else if (/^-?\d+(\.\d+)?$/.test(part)) {
+      const v = Number(part);
+      if (!sNums.some((x) => Math.abs(x - v) < 1e-9)) return 'result ' + part + ' not in the sentence unchanged';
+    } else if (/^\d{2}:\d{2}$/.test(part)) {
+      if (!S.includes(part) && !S.includes(part.replace(/^0/, ''))) return 'result time ' + part + ' not in the sentence';
+    } else if (!S.includes(clean(part))) return 'result "' + part + '" not in the sentence';
+  }
+  const allowed = [...numsOf(result), ...numsOf(question)];
+  for (const n of sNums) if (!allowed.some((x) => Math.abs(x - n) < 1e-9)) return 'the sentence adds the number ' + n;
+  return null;
+}
+
 // ------------------------------------------------------------------ question resolution
 // A first, throwaway model call rewrites the question clearly -- spelling fixed,
 // numbers as digits, times as HH:MM, assumptions stated -- without answering it.
@@ -425,10 +494,14 @@ export async function resolveQuestion(q, io) {
 
 // The whole typed pipeline, shared by the page and the stand-in runner.
 // io: { first(system, q) -> reply, again(text) -> reply (same conversation), py(code) -> { ok, out, err } }
-export async function typedAnswer(q0, io, { resolve = false } = {}) {
+export async function typedAnswer(q0, io, { resolve = false, writeUp = true, maxSteps = 3 } = {}) {
   let q = q0;
-  const r = { typed: true, problems: [], repaired: false };
-  if (resolve && io.resolve) { r.resolved = await resolveQuestion(q0, io); q = r.resolved.question; }
+  const r = { typed: true, problems: [], repaired: false, steps: [] };
+  // 1. Plain-code normalising: number words and clock phrases -> digits (instant, never wrong about what was said).
+  const norm = normaliseQuestion(q0);
+  if (norm !== q0) { r.normalised = norm; q = norm; }
+  // 2. Optional model rewrite (off by default: on Nano it mostly failed its own check and cost 2-5 s).
+  if (resolve && io.resolve) { r.resolved = await resolveQuestion(q, io); q = r.resolved.question; }
   r.inferred = inferType(q0) === 'multi' ? 'multi' : inferType(q);
   // Plain code decides whether tools are offered at all (added after Nano, told
   // "ANY question involving numbers", wrote code for 11 of 18 plain questions).
@@ -442,25 +515,57 @@ export async function typedAnswer(q0, io, { resolve = false } = {}) {
     r.code = extractPython(more);
   }
   if (!r.code) { r.final = r.reply; return r; }
-  const TRIES = 3; // first try + 2 retries (was 1 retry: the values check often used it up before the real error showed)
-  for (let attempt = 0; attempt < TRIES; attempt++) {
+  const TRIES = 3; // first try + 2 retries
+  let attempt = 0;
+  while (attempt < TRIES) {
     r.declared = declaredType(r.code);
     r.type = r.inferred || 'auto';
     r.typeMismatch = !!(r.inferred && r.declared && r.inferred !== r.declared);
+    const tidy = tidyCode(r.code);
+    // 3. Multi-step: code with no answer() that prints something is a look at an
+    // intermediate result. The model sees the output and continues -- at most
+    // maxSteps blocks in all; each runs in a fresh sandbox.
+    if (!/def\s+answer\s*\(/.test(r.code) && r.steps.length < maxSteps - 1) {
+      const look = await io.py(tidy);
+      if (look.ok && look.out.trim()) {
+        r.steps.push({ code: r.code, out: look.out.trim().slice(0, 1500) });
+        const next = await io.again('Your code printed:\n' + look.out.trim().slice(0, 1500) + '\nContinue with the next ```python block. Each block runs fresh, so repeat any values you need. If that is already the result, now write def answer() that computes it (do not type the value in).');
+        let c = extractPython(next);
+        if (!c) { // it answered in words after the step: ask once for the final code (the train question stopped here, 0/3)
+          const fin = await io.again('Now reply with only a ```python block that defines def answer() computing the final result from the question\'s values.');
+          c = extractPython(fin);
+          if (!c) { r.problems.push('no final code after an intermediate step'); break; }
+        }
+        r.code = c;
+        continue; // a step is not a retry
+      }
+    }
     const inputs = inputProblem(q, r.code);
     let problem = null;
     if (!/def\s+answer\s*\(/.test(r.code)) problem = 'define def answer(): that returns the final value';
     else if (inputs) problem = inputs;
     else {
-      const tidy = tidyCode(r.code);
       const run = await io.py(tidy + '\n' + pyWrapper(r.type, tidy));
       const m = run.ok && /__ANSWER__=(.*)$/m.exec(run.out);
-      if (m) { r.out = r.final = m[1].trim(); r.checks = attempt ? 'passed on retry' : 'passed'; return r; }
+      if (m) {
+        r.out = r.final = m[1].trim(); r.checks = attempt ? 'passed on retry' : 'passed';
+        // 4. Write-up: the model phrases the answer; plain code checks the result is in it, unchanged, and nothing else numeric was added.
+        if (writeUp && io.writeup) {
+          try {
+            const text = 'Question: ' + q + '\nComputed result: ' + r.out + (r.steps.length ? '\nIntermediate results: ' + r.steps.map((x) => x.out.split('\n').slice(0, 3).join('; ')).join(' | ') : '');
+            const sentence = String(await io.writeup(PROMPT_WRITEUP, text) || '').trim();
+            const bad = checkWriteup(r.out, sentence, q);
+            if (bad) { r.writeupRejected = sentence; r.writeupProblem = bad; } else r.writeup = sentence;
+          } catch (e) { r.writeupProblem = 'write-up failed: ' + String(e.message || e).slice(0, 80); }
+        }
+        return r;
+      }
       // The reason is on the "TypeError: ANSWER CHECK: ..." line -- not the traceback's copy of the raise statement.
       problem = run.ok ? 'answer() produced no value' : ((/TypeError: ANSWER CHECK: (.*)/.exec(run.err) || [])[1] || 'it failed with: ' + run.err);
     }
     r.problems.push(problem);
-    if (attempt === TRIES - 1) break;
+    attempt++;
+    if (attempt === TRIES) break;
     r.repaired = true;
     const hint = r.type === 'time' ? ' For clock times use datetime: (datetime.datetime(2000, 1, 1, H, M) + datetime.timedelta(hours=..., minutes=...)).strftime("%H:%M").' : '';
     const fix = await io.again('Your code was rejected: ' + problem + '.' + hint + ' Reply with only a corrected ```python code block (ANSWER_TYPE and def answer()).');
@@ -468,6 +573,6 @@ export async function typedAnswer(q0, io, { resolve = false } = {}) {
     if (!c2) break;
     r.code2 = r.code = c2;
   }
-  r.final = ''; r.out = null; r.err = r.problems[r.problems.length - 1];
+  r.final = ''; r.out = null; r.err = r.problems[r.problems.length - 1] || 'no final code';
   return r;
 }
