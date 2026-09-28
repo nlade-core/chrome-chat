@@ -349,7 +349,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · <a href="?tour" id="tour-link">Take the tour</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 18:00 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 11:17 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -367,6 +367,8 @@
         <p><strong>Weather and currency:</strong> questions like "weather in Edinburgh tomorrow" or "£50 in euros" are answered from live data, not the model: weather from <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>, exchange rates from the European Central Bank via <a href="https://www.frankfurter.dev/" target="_blank" rel="noopener">Frankfurter</a> (daily reference rates — not what a bank or card will charge). The answer is written by plain code from the numbers, with its source. Only the place name, or the two currency codes, is sent to those services. With no place or currency in the question, it uses your saved ones below, or guesses from your browser (time zone for the place, language region for the currency) and says so.
           <span class="home-settings"><input id="home-place" placeholder="Home town, e.g. Edinburgh" size="22"><input id="home-currency" placeholder="Currency, e.g. GBP" size="10" maxlength="3"><button type="button" id="home-save" class="icon-btn">Save</button><span id="home-note" class="cite-meta"></span></span>
           <label style="display:block;margin-top:0.35rem;"><input type="checkbox" id="live-toggle"> Answer weather and currency questions from live data</label></p>
+        <p><strong>Facts, checked:</strong> a factual question ("capital of…", "when was… born", "who is the current…", "what was the Tay Bridge disaster?") is looked up rather than answered from the model's memory — single facts from <a href="https://www.wikidata.org/" target="_blank" rel="noopener">Wikidata</a>, checked against the Wikipedia article and written by plain code; anything else answered only from the article, with the supporting sentence quoted and checked to be really there. If it can't confirm an answer it says so rather than guessing. The thing you're asking about (not the rest of the conversation) is sent to Wikipedia/Wikidata. Creative, advice and how-to requests aren't looked up.
+          <label style="display:block;margin-top:0.35rem;"><input type="checkbox" id="knowledge-toggle"> Look up facts on Wikipedia</label></p>
         <p><strong>Requirements:</strong> branded Google Chrome (desktop), a recent enough version to support the on-device Prompt API. It won't work in other browsers, or in plain Chromium.</p>
         <p><strong>Fully open source</strong> (GPL-3.0) — every line of what's running is in the public repository linked in the sidebar, nothing hidden. Offline Wikipedia uses <a href="https://github.com/openzim/javascript-libzim" target="_blank" rel="noopener">Kiwix's libzim</a> (GPL-3.0); Wikipedia text is CC BY-SA 4.0.</p>
       </div>
@@ -424,11 +426,12 @@
     import { marked } from 'https://cdn.jsdelivr.net/npm/marked@18.0.11/lib/marked.esm.js';
     // The compute path's gate and question normaliser (plain code, same origin, ~30 KB);
     // the runtime itself -- Python worker, model calls -- loads only when first needed.
-    import { looksComputable, normaliseQuestion, todayText } from './lab/compute-core.js';
+    import { looksComputable, normaliseQuestion, todayText, needsToday } from './lab/compute-core.js';
     // Live-data tools (weather, currency): plain code picks at most one, answers are written from the data.
     import { pickTool, runTool, detectClarify, applyDatePref, savePrefs } from './tools/index.js';
     import { looksLikeFollowUp, ruleRewrite, modelRewrite } from './tools/followup.js';
     import { detectExplicit } from './tools/intent.js';
+    import { knowledgeIntent, lookUp } from './tools/knowledge.js';
     import { TOOLS } from './tools/index.js';
     import { homeContext, loadHome, saveHome } from './tools/context.js';
 
@@ -950,7 +953,7 @@
                 sessionPart +
               '</div>'
             : '';
-          row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + computeHtml(m) + toolHtml(m) + clarifyHtml(m, i, i === lastIndex && !isStreaming) + timingHtml + actions + '</div>';
+          row.innerHTML = '<div class="content">' + renderMarkdown(m.content) + computeHtml(m) + toolHtml(m) + knowledgeHtml(m) + clarifyHtml(m, i, i === lastIndex && !isStreaming) + timingHtml + actions + '</div>';
         }
         chatLog.appendChild(row);
       });
@@ -3568,6 +3571,8 @@
     // ---------------------------------------------------------------- routing + asking
     // Order: ask (only for a detected fork) -> live-data tool -> Python -> plain chat.
     async function routeMessage(text, { skipClarify = false } = {}) {
+      // The guided tour's "ask it cold" chapters reach the model plainly -- no routing at all.
+      if (window.__tourPlain) { await sendText(text, null, null, undefined, null); return; }
       const convNow = activeThreadId !== null ? conversations.get(activeThreadId) : null;
       let note = null, display = null, understood = null;
       // An explicit request ("ask the weather API…", "use Python for that", "look it up on
@@ -3610,6 +3615,9 @@
           const pick = understood ? pickTool(text, null) : pickTool(text, lastToolContext(convNow));
           if (pick) { await sendTool(text, pick, { note, display, understood }); return; }
         }
+        // Facts: looked up, never from memory -- unless it's date arithmetic or a sum (Python's job).
+        const kn = knowledgeEnabled ? knowledgeIntent(text) : null;
+        if (kn && !needsToday(text) && !/%|[×*÷+]|\b(percent|plus|minus|times|divided by|multiplied)\b/i.test(text)) { await sendKnowledge(text, kn, { display, understood }); return; }
       }
       if (understood ? shouldCompute(text, null) : shouldCompute(text, convNow)) { await sendCompute(text, { note, display, understood }); return; }
       await sendText(display || text, null, null, undefined, null);
@@ -3627,7 +3635,7 @@
       return null;
     }
     // Would this standalone question go to a tool or Python (rather than the plain chat)?
-    const routesToAnswerer = (q) => !!(detectClarify(q) || (liveEnabled && pickTool(q, null)) || shouldCompute(q, null));
+    const routesToAnswerer = (q) => !!(detectClarify(q) || (liveEnabled && pickTool(q, null)) || (knowledgeEnabled && knowledgeIntent(q)) || shouldCompute(q, null));
     // The last few real turns (no clarification exchanges), for reading a follow-up in context.
     function recentTurns(conv) {
       if (!conv) return [];
@@ -3679,6 +3687,58 @@
       if (!m.clarify) return '';
       if (m.clarify.done) return '<div class="compute-box">→ ' + escapeHtml(m.clarify.done) + '</div>';
       return '<div class="clarify-box">' + m.clarify.options.map((o, k) => '<button class="icon-btn clarify-btn" data-i="' + i + '" data-o="' + k + '"' + (active ? '' : ' disabled') + '>' + escapeHtml(o.label) + '</button>').join('') + '</div>';
+    }
+    // ---------------------------------------------------------------- facts, checked
+    let knowledgeEnabled = true;
+    try { knowledgeEnabled = localStorage.getItem('chrome-chat-knowledge') !== 'off'; } catch {}
+    const knowledgeToggle = document.getElementById('knowledge-toggle');
+    knowledgeToggle.checked = knowledgeEnabled;
+    knowledgeToggle.addEventListener('change', () => { knowledgeEnabled = knowledgeToggle.checked; try { localStorage.setItem('chrome-chat-knowledge', knowledgeEnabled ? 'on' : 'off'); } catch {} });
+    async function sendKnowledge(text, intent, { display = null, understood = null } = {}) {
+      let threadId = activeThreadId;
+      if (threadId === null) {
+        threadId = crypto.randomUUID();
+        activeThreadId = threadId;
+        conversations.set(threadId, { messages: [], session: null, streaming: false, abortController: null, forkMeta: null });
+      }
+      const conv = conversations.get(threadId);
+      const isShown = () => activeThreadId === threadId;
+      conv.messages.push({ role: 'user', content: display || text });
+      persistThread(threadId);
+      const msg = { role: 'assistant', content: '', knowledge: { stage: 'Looking it up on Wikipedia…' } };
+      conv.messages.push(msg);
+      conv.streaming = true;
+      if (isShown()) { chatSendBtn.disabled = true; stickToBottom = true; chatNote.textContent = msg.knowledge.stage; renderChat(); }
+      renderThreadList();
+      const startedAt = performance.now();
+      let r;
+      try {
+        const rt = await loadCompute();
+        const api = (u) => fetch(u, { headers: { 'Api-User-Agent': 'chrome-chat (https://github.com/nlade-core/chrome-chat)' } });
+        r = await lookUp(text, intent, { fetch: api, oneShot: rt.oneShot });
+      } catch (e) { r = { status: 'declined', answer: 'Couldn\u2019t reach Wikipedia (' + e.message + ') — nothing was guessed.' }; }
+      msg.content = r.answer;
+      msg.knowledge = { status: r.status, kind: r.kind, quote: r.quote || null, source: r.source || (r.link ? { wikipedia: r.link } : null), title: r.title || null, understood };
+      msg.timingMs = { total: Math.round(performance.now() - startedAt) };
+      conv.streaming = false;
+      if (conv.session) { try { conv.session.destroy(); } catch {} conv.session = null; }
+      persistThread(threadId);
+      if (isShown()) { chatNote.textContent = ''; chatSendBtn.disabled = !promptOk; renderChat(); }
+      renderThreadList();
+      if (conv.messages.length === 2) maybeGenerateTitle(threadId, text);
+      document.dispatchEvent(new CustomEvent('chat:reply', { detail: { text, threadId, reply: msg.content, label: null, error: null } }));
+    }
+    function knowledgeHtml(m) {
+      const k = m.knowledge;
+      if (!k) return '';
+      if (k.stage) return '<div class="compute-box">⏳ ' + escapeHtml(k.stage) + '</div>';
+      const links = k.source ? [k.source.wikipedia && '<a href="' + escapeHtml(k.source.wikipedia) + '" target="_blank" rel="noopener">Wikipedia' + (k.title ? ': ' + escapeHtml(k.title) : '') + '</a>' + (k.source.revised ? ' (revision of ' + escapeHtml(k.source.revised) + ')' : ''),
+        k.source.wikidata && '<a href="' + escapeHtml(k.source.wikidata) + '" target="_blank" rel="noopener">Wikidata</a>'].filter(Boolean).join(' · ') : '';
+      if (k.status !== 'answered') return '<div class="compute-box warn">📚 Not confirmed — nothing was guessed.' + (links ? ' ' + links : '') + '</div>';
+      return '<div class="compute-box">' + (k.understood ? '<div class="compute-meta">Understood as: ' + escapeHtml(k.understood) + '</div>' : '')
+        + '<div>📚 From ' + links + '</div>'
+        + (k.quote ? '<div class="compute-meta">Supported by: “' + escapeHtml(k.quote) + '” — checked word for word in the article.</div>' : '')
+        + (k.kind === 'fact' ? '<div class="compute-meta">Written by plain code from the data — the model didn’t produce this fact.</div>' : '') + '</div>';
     }
     function toolHtml(m) {
       const t = m.tool;

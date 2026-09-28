@@ -295,6 +295,8 @@ function go(i) {
   state.ch = Math.max(0, Math.min(CHAPTERS.length - 1, i)); save();
   token++;
   const ch = CHAPTERS[state.ch];
+  // Chapters that show the model on its own must reach it plainly -- no lookups or tools.
+  window.__tourPlain = ['c1', 'c2', 'c5'].includes(ch.key);
   header.textContent = '';
   header.append(h('span', { class: 'tour-step' }, state.ch === 0 || state.ch === CHAPTERS.length - 1 ? 'Guided tour' : 'Chapter ' + state.ch + ' of ' + (CHAPTERS.length - 2)), h('h3', {}, ch.title));
   body.textContent = '';
@@ -311,7 +313,7 @@ export async function startTour(api) {
     header = h('div', { class: 'tour-title' });
     body = h('div', { class: 'tour-body' });
     root = h('aside', { id: 'tour', 'aria-label': 'Guided tour' },
-      h('div', { class: 'tour-head' }, header, h('button', { class: 'tour-close', 'aria-label': 'Close the tour', on: { click: () => { root.hidden = true; document.body.classList.remove('tour-open'); token++; } } }, '×')),
+      h('div', { class: 'tour-head' }, header, h('button', { class: 'tour-close', 'aria-label': 'Close the tour', on: { click: () => { root.hidden = true; document.body.classList.remove('tour-open'); window.__tourPlain = false; token++; } } }, '×')),
       body,
       h('div', { class: 'tour-foot' },
         h('button', { class: 'tour-btn tour-back', on: { click: () => go(state.ch - 1) } }, '← Back'),
