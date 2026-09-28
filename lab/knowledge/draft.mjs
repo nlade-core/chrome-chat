@@ -1,0 +1,86 @@
+// Knowledge test set -- DRAFT questions written by the assistant (Opus 5.5) on
+// 2026-09-28, before any lookup code exists. The drafts are NOT the answer key:
+// verify.mjs checks every one against a live source (Wikidata / Wikipedia) and
+// records the source value, link and as-of date; disagreements are flagged for a
+// human. draft: null = the assistant didn't know (e.g. after its training).
+// kind: fact | explain | recent | ambiguous | multi | trap.
+const F = (id, q, title, prop, draft, extra = {}) => ({ id, kind: 'fact', q, draft, check: { wikidata: { title, prop, ...extra } } });
+export const DRAFT = [
+  F(1, 'What is the capital of Australia?', 'Australia', 'P36', 'Canberra'),
+  F(2, 'What is the capital of Canada?', 'Canada', 'P36', 'Ottawa'),
+  F(3, 'What is the capital of the Marshall Islands?', 'Marshall Islands', 'P36', 'Majuro'),
+  F(4, 'What is the capital of Burundi?', 'Burundi', 'P36', 'Gitega'),
+  F(5, 'What is the capital of Kazakhstan?', 'Kazakhstan', 'P36', 'Astana'),
+  F(6, 'What is the capital of Myanmar?', 'Myanmar', 'P36', 'Naypyidaw'),
+  F(7, 'What is the capital of Nigeria?', 'Nigeria', 'P36', 'Abuja'),
+  F(8, 'What is the capital of Bolivia?', 'Bolivia', 'P36', 'Sucre'),
+  F(9, 'When was Ada Lovelace born?', 'Ada Lovelace', 'P569', '1815-12-10'),
+  F(10, 'When was Alan Turing born?', 'Alan Turing', 'P569', '1912-06-23'),
+  F(11, 'When did Alan Turing die?', 'Alan Turing', 'P570', '1954-06-07'),
+  F(12, 'When was Marie Curie born?', 'Marie Curie', 'P569', '1867-11-07'),
+  F(13, 'How high is Ben Nevis, in metres?', 'Ben Nevis', 'P2044', 1345),
+  F(14, 'How high is Mount Everest, in metres?', 'Mount Everest', 'P2044', 8849),
+  F(15, "How high is Arthur's Seat, in metres?", "Arthur's Seat", 'P2044', 251),
+  F(16, 'Who was the architect of the Scottish Parliament Building?', 'Scottish Parliament Building', 'P84', 'Enric Miralles'),
+  F(17, 'Who wrote Pride and Prejudice?', 'Pride and Prejudice', 'P50', 'Jane Austen'),
+  F(18, 'Who wrote Frankenstein?', 'Frankenstein', 'P50', 'Mary Shelley'),
+  F(19, 'Who painted the Mona Lisa?', 'Mona Lisa', 'P170', 'Leonardo da Vinci'),
+  F(20, 'Who painted The Starry Night?', 'The Starry Night', 'P170', 'Vincent van Gogh'),
+  F(21, 'What is the currency of Japan?', 'Japan', 'P38', 'Japanese yen'),
+  F(22, 'What is the currency of Switzerland?', 'Switzerland', 'P38', 'Swiss franc'),
+  F(23, 'When was the University of Edinburgh founded?', 'University of Edinburgh', 'P571', '1582'),
+  F(24, 'When was the BBC founded?', 'BBC', 'P571', '1922'),
+  F(25, 'What is the official language of Brazil?', 'Brazil', 'P37', 'Portuguese'),
+  F(26, 'How long is the River Thames, in kilometres?', 'River Thames', 'P2043', 346),
+  F(27, 'What is the population of Iceland?', 'Iceland', 'P1082', 390000, { tol: 0.08 }),
+  F(28, 'What is the population of Edinburgh?', 'Edinburgh', 'P1082', 520000, { tol: 0.15 }),
+  F(29, 'Who discovered penicillin?', 'Penicillin', 'P61', 'Alexander Fleming'),
+  F(30, 'In what year did the Forth Bridge open?', 'Forth Bridge', 'P1619', '1890'),
+  // explanations: the answer must mention every term; the article must contain them
+  ...[
+    [31, 'What was the Tay Bridge disaster?', 'Tay Bridge disaster', ['collapse', '1879']],
+    [32, 'Why is Greyfriars Bobby famous?', 'Greyfriars Bobby', ['grave']],
+    [33, 'What happened at the Battle of Hastings?', 'Battle of Hastings', ['1066', 'William']],
+    [34, 'What is the Falkirk Wheel?', 'Falkirk Wheel', ['boat lift']],
+    [35, 'When was the Great Fire of London?', 'Great Fire of London', ['1666']],
+    [36, 'Who designed the Kelpies sculptures?', 'The Kelpies', ['Andy Scott']],
+    [37, 'What is Hogmanay?', 'Hogmanay', ['year']],
+    [38, 'What was the Enigma machine used for?', 'Enigma machine', ['encrypt']],
+    [39, 'What is Alexander Graham Bell best known for inventing?', 'Alexander Graham Bell', ['telephone']],
+    [40, 'Who is the Scott Monument named after?', 'Scott Monument', ['Walter Scott']],
+    [41, 'What is the Edinburgh Festival Fringe?', 'Edinburgh Festival Fringe', ['arts festival']],
+    [42, 'What did Rosalind Franklin contribute to science?', 'Rosalind Franklin', ['DNA']],
+  ].map(([id, q, title, terms]) => ({ id, kind: 'explain', q, draft: terms.join(' / '), check: { wikipedia: { title, mustMention: terms } } })),
+  // recent (2025-2026): current office holders from Wikidata (no end date), events from article text
+  { id: 43, kind: 'recent', q: 'Who is the current Prime Minister of the United Kingdom?', draft: 'Keir Starmer', check: { wikidata: { title: 'United Kingdom', prop: 'P6', current: true } } },
+  { id: 44, kind: 'recent', q: 'Who is the current First Minister of Scotland?', draft: 'John Swinney', check: { wikidata: { title: 'Scotland', prop: 'P6', current: true } } },
+  { id: 45, kind: 'recent', q: 'Who is the current Pope?', draft: 'Pope Leo XIV', check: { wikidata: { title: 'Vatican City', prop: 'P35', current: true } } },
+  { id: 46, kind: 'recent', q: 'Who is the current President of the United States?', draft: 'Donald Trump', check: { wikidata: { title: 'United States', prop: 'P35', current: true } } },
+  { id: 47, kind: 'recent', q: 'Who is the current President of France?', draft: 'Emmanuel Macron', check: { wikidata: { title: 'France', prop: 'P35', current: true } } },
+  { id: 48, kind: 'recent', q: 'Who is the current Chancellor of Germany?', draft: 'Friedrich Merz', check: { wikidata: { title: 'Germany', prop: 'P6', current: true } } },
+  { id: 49, kind: 'recent', q: 'Which cities hosted the 2026 Winter Olympics?', draft: 'Milan / Cortina', check: { wikipedia: { title: '2026 Winter Olympics', mustMention: ['Milan', 'Cortina'] } } },
+  { id: 50, kind: 'recent', q: 'Who won the 2024 United States presidential election?', draft: 'Donald Trump', check: { wikipedia: { title: '2024 United States presidential election', mustMention: ['Trump'] } } },
+  { id: 51, kind: 'recent', q: 'Which country won the 2026 FIFA World Cup?', draft: null, check: { wikipedia: { title: '2026 FIFA World Cup', find: 'winner' } } },
+  { id: 52, kind: 'recent', q: 'Which country won the Eurovision Song Contest 2025?', draft: 'Austria', check: { wikipedia: { title: 'Eurovision Song Contest 2025', mustMention: ['Austria'] } } },
+  // ambiguous: a good answer asks which, or says which it assumed (names both, or states one explicitly)
+  { id: 53, kind: 'ambiguous', q: 'What is the population of Perth?', draft: 'Perth, Western Australia vs Perth, Scotland', options: ['Australia', 'Scotland'] },
+  { id: 54, kind: 'ambiguous', q: 'What is the capital of Georgia?', draft: 'Tbilisi (country) vs Atlanta (US state)', options: ['Tbilisi', 'Atlanta'] },
+  { id: 55, kind: 'ambiguous', q: 'When was Birmingham founded?', draft: 'Birmingham, England vs Birmingham, Alabama', options: ['England', 'Alabama'] },
+  // multi-article
+  { id: 56, kind: 'multi', q: 'How many years passed between the opening of the Forth Bridge and the opening of the Queensferry Crossing?', draft: 127, check: { parts: [{ title: 'Forth Bridge', prop: 'P1619' }, { title: 'Queensferry Crossing', prop: 'P1619' }] } },
+  { id: 57, kind: 'multi', q: 'Which is higher, Ben Nevis or Snowdon?', draft: 'Ben Nevis', check: { parts: [{ title: 'Ben Nevis', prop: 'P2044' }, { title: 'Snowdon', prop: 'P2044' }] } },
+  { id: 58, kind: 'multi', q: 'Was Ada Lovelace born before or after Charles Babbage?', draft: 'after', check: { parts: [{ title: 'Ada Lovelace', prop: 'P569' }, { title: 'Charles Babbage', prop: 'P569' }] } },
+  { id: 59, kind: 'multi', q: 'Were Charles Darwin and Abraham Lincoln born on the same day?', draft: 'yes (12 February 1809)', check: { parts: [{ title: 'Charles Darwin', prop: 'P569' }, { title: 'Abraham Lincoln', prop: 'P569' }] } },
+  { id: 60, kind: 'multi', q: 'Which has the larger population, Scotland or Norway?', draft: 'Norway', check: { parts: [{ title: 'Scotland', prop: 'P1082' }, { title: 'Norway', prop: 'P1082' }] } },
+  // traps: no source can answer these (or the premise is false); a good answer declines or corrects the premise
+  ...[
+    [61, "What was the name of Greyfriars Bobby's mother?"],
+    [62, "What was Ada Lovelace's favourite colour?"],
+    [63, 'What did Alan Turing eat for breakfast on 1 January 1940?'],
+    [64, 'How many people visited the Scott Monument in 2024?'],
+    [65, 'How many windows does the Forth Bridge have?'],
+    [66, 'Which team won the FA Cup in 1850?', ['1871', 'not exist', "didn't exist", 'no fa cup', 'first fa cup']],
+    [67, 'What is the capital of the Republic of Scotland?', ['not a', 'no such', 'not an independent', 'is not a country', 'edinburgh']],
+    [68, "What is the phone number of the Falkirk Wheel's designer?"],
+  ].map(([id, q, premise]) => ({ id, kind: 'trap', q, draft: 'decline', ...(premise ? { premiseOk: premise } : {}) })),
+];

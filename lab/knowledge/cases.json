@@ -1,0 +1,2174 @@
+{
+ "built": "2026-09-28T10:29:23.336Z",
+ "note": "Answer key from live sources; drafts by the assistant are not the key. Statuses other than verified/by-design need a human decision.",
+ "cases": [
+  {
+   "id": 1,
+   "kind": "fact",
+   "q": "What is the capital of Australia?",
+   "draft": "Canberra",
+   "check": {
+    "wikidata": {
+     "title": "Australia",
+     "prop": "P36"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Canberra",
+     "aliases": [
+      "Canberra, Australia",
+      "Canberra, Australian Capital Territory"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q408#P36",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Canberra"
+  },
+  {
+   "id": 2,
+   "kind": "fact",
+   "q": "What is the capital of Canada?",
+   "draft": "Ottawa",
+   "check": {
+    "wikidata": {
+     "title": "Canada",
+     "prop": "P36"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Ottawa",
+     "aliases": [
+      "Ottawa, Ontario",
+      "Ottawa, ON",
+      "City of Ottawa"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q16#P36",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Ottawa"
+  },
+  {
+   "id": 3,
+   "kind": "fact",
+   "q": "What is the capital of the Marshall Islands?",
+   "draft": "Majuro",
+   "check": {
+    "wikidata": {
+     "title": "Marshall Islands",
+     "prop": "P36"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Majuro",
+     "aliases": [
+      "Mājro",
+      "Majuro, Marshall Islands"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q709#P36",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Majuro"
+  },
+  {
+   "id": 4,
+   "kind": "fact",
+   "q": "What is the capital of Burundi?",
+   "draft": "Gitega",
+   "check": {
+    "wikidata": {
+     "title": "Burundi",
+     "prop": "P36"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Gitega",
+     "aliases": [
+      "Kitega"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q967#P36",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Gitega"
+  },
+  {
+   "id": 5,
+   "kind": "fact",
+   "q": "What is the capital of Kazakhstan?",
+   "draft": "Astana",
+   "check": {
+    "wikidata": {
+     "title": "Kazakhstan",
+     "prop": "P36"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Astana",
+     "aliases": [
+      "Akmola",
+      "Aqmola",
+      "Tselinograd",
+      "Akmolinsk",
+      "Nur-Sultan"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q232#P36",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Astana"
+  },
+  {
+   "id": 6,
+   "kind": "fact",
+   "q": "What is the capital of Myanmar?",
+   "draft": "Naypyidaw",
+   "check": {
+    "wikidata": {
+     "title": "Myanmar",
+     "prop": "P36"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Naypyidaw",
+     "aliases": [
+      "Nay Pyi Taw",
+      "Naypyitaw"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q836#P36",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Naypyidaw"
+  },
+  {
+   "id": 7,
+   "kind": "fact",
+   "q": "What is the capital of Nigeria?",
+   "draft": "Abuja",
+   "check": {
+    "wikidata": {
+     "title": "Nigeria",
+     "prop": "P36"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Abuja",
+     "aliases": [
+      "ABV",
+      "ABJ",
+      "FCT",
+      "Federal Capital Territory"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q1033#P36",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Abuja"
+  },
+  {
+   "id": 8,
+   "kind": "fact",
+   "q": "What is the capital of Bolivia?",
+   "draft": "Sucre",
+   "check": {
+    "wikidata": {
+     "title": "Bolivia",
+     "prop": "P36"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Sucre",
+     "aliases": [
+      "Charcas",
+      "La Plata",
+      "Chuquisaca",
+      "The Illustrious and Heroic Sucre"
+     ]
+    },
+    {
+     "label": "La Paz",
+     "aliases": [
+      "Nuestra Señora de La Paz",
+      "Chuqi Yapu",
+      "Chuqiyapu"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q750#P36",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Sucre / La Paz"
+  },
+  {
+   "id": 9,
+   "kind": "fact",
+   "q": "When was Ada Lovelace born?",
+   "draft": "1815-12-10",
+   "check": {
+    "wikidata": {
+     "title": "Ada Lovelace",
+     "prop": "P569"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "value": "1815-12-10"
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q7259#P569",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "1815-12-10"
+  },
+  {
+   "id": 10,
+   "kind": "fact",
+   "q": "When was Alan Turing born?",
+   "draft": "1912-06-23",
+   "check": {
+    "wikidata": {
+     "title": "Alan Turing",
+     "prop": "P569"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "value": "1912-06-23"
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q7251#P569",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "1912-06-23"
+  },
+  {
+   "id": 11,
+   "kind": "fact",
+   "q": "When did Alan Turing die?",
+   "draft": "1954-06-07",
+   "check": {
+    "wikidata": {
+     "title": "Alan Turing",
+     "prop": "P570"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "value": "1954-06-07"
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q7251#P570",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "1954-06-07"
+  },
+  {
+   "id": 12,
+   "kind": "fact",
+   "q": "When was Marie Curie born?",
+   "draft": "1867-11-07",
+   "check": {
+    "wikidata": {
+     "title": "Marie Curie",
+     "prop": "P569"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "value": "1867-11-07"
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q7186#P569",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "1867-11-07"
+  },
+  {
+   "id": 13,
+   "kind": "fact",
+   "q": "How high is Ben Nevis, in metres?",
+   "draft": 1345,
+   "check": {
+    "wikidata": {
+     "title": "Ben Nevis",
+     "prop": "P2044"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "value": 1344.527,
+     "unit": "Q11573"
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q104674#P2044",
+    "asOf": "2016",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "1344.527 (Q11573) [as of 2016]"
+  },
+  {
+   "id": 14,
+   "kind": "fact",
+   "q": "How high is Mount Everest, in metres?",
+   "draft": 8849,
+   "check": {
+    "wikidata": {
+     "title": "Mount Everest",
+     "prop": "P2044"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "value": 8848.86,
+     "unit": "Q11573"
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q513#P2044",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "8848.86 (Q11573)"
+  },
+  {
+   "id": 15,
+   "kind": "fact",
+   "q": "How high is Arthur's Seat, in metres?",
+   "draft": 251,
+   "check": {
+    "wikidata": {
+     "title": "Arthur's Seat",
+     "prop": "P2044"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "value": 251,
+     "unit": "Q11573"
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q712311#P2044",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "251 (Q11573)"
+  },
+  {
+   "id": 16,
+   "kind": "fact",
+   "q": "Who was the architect of the Scottish Parliament Building?",
+   "draft": "Enric Miralles",
+   "check": {
+    "wikidata": {
+     "title": "Scottish Parliament Building",
+     "prop": "P84"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Enric Miralles",
+     "aliases": [
+      "Enrique Miralles",
+      "Enric Miralles-Moya",
+      "Enric Miralles Moya",
+      "Enric Miralles i Moya"
+     ]
+    },
+    {
+     "label": "Benedetta Tagliabue",
+     "aliases": []
+    },
+    {
+     "label": "RMJM",
+     "aliases": []
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q2746031#P84",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Enric Miralles / Benedetta Tagliabue / RMJM"
+  },
+  {
+   "id": 17,
+   "kind": "fact",
+   "q": "Who wrote Pride and Prejudice?",
+   "draft": "Jane Austen",
+   "check": {
+    "wikidata": {
+     "title": "Pride and Prejudice",
+     "prop": "P50"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Jane Austen",
+     "aliases": [
+      "Ao-ssu-ting",
+      "Author of Sense and sensibility",
+      "Lady",
+      "Jane Austen"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q170583#P50",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Jane Austen"
+  },
+  {
+   "id": 18,
+   "kind": "fact",
+   "q": "Who wrote Frankenstein?",
+   "draft": "Mary Shelley",
+   "check": {
+    "wikidata": {
+     "title": "Frankenstein",
+     "prop": "P50"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Mary Shelley",
+     "aliases": [
+      "Mary Wollstonecraft Shelley",
+      "Mary Wollstonecraft Godwin",
+      "Mary Godwin"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q150827#P50",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Mary Shelley"
+  },
+  {
+   "id": 19,
+   "kind": "fact",
+   "q": "Who painted the Mona Lisa?",
+   "draft": "Leonardo da Vinci",
+   "check": {
+    "wikidata": {
+     "title": "Mona Lisa",
+     "prop": "P170"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Leonardo da Vinci",
+     "aliases": [
+      "Leonardo",
+      "Leonard",
+      "Leonardo Da Vinci",
+      "Leonardo di ser Piero da Vinci",
+      "da Vinci",
+      "Léonard"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q12418#P170",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Leonardo da Vinci"
+  },
+  {
+   "id": 20,
+   "kind": "fact",
+   "q": "Who painted The Starry Night?",
+   "draft": "Vincent van Gogh",
+   "check": {
+    "wikidata": {
+     "title": "The Starry Night",
+     "prop": "P170"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Vincent van Gogh",
+     "aliases": [
+      "Vincent Willem van Gogh",
+      "Van Gogh",
+      "van Gogh",
+      "Vincent Van Gogh"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q45585#P170",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Vincent van Gogh"
+  },
+  {
+   "id": 21,
+   "kind": "fact",
+   "q": "What is the currency of Japan?",
+   "draft": "Japanese yen",
+   "check": {
+    "wikidata": {
+     "title": "Japan",
+     "prop": "P38"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "yen",
+     "aliases": [
+      "Japanese yen",
+      "JPY",
+      "¥"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q17#P38",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "yen"
+  },
+  {
+   "id": 22,
+   "kind": "fact",
+   "q": "What is the currency of Switzerland?",
+   "draft": "Swiss franc",
+   "check": {
+    "wikidata": {
+     "title": "Switzerland",
+     "prop": "P38"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Swiss franc",
+     "aliases": [
+      "Swiss franco",
+      "Franc",
+      "Swiss francs",
+      "Schweizer Franken",
+      "Chf",
+      "S₣",
+      "Swiss Frank",
+      "Swiss Franken",
+      "Franc suisse",
+      "Franco svizzero",
+      "Confœderatio Helvetica Franc",
+      "CHF (Swiss Franc)"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q39#P38",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Swiss franc"
+  },
+  {
+   "id": 23,
+   "kind": "fact",
+   "q": "When was the University of Edinburgh founded?",
+   "draft": "1582",
+   "check": {
+    "wikidata": {
+     "title": "University of Edinburgh",
+     "prop": "P571"
+    }
+   },
+   "status": "DISAGREES",
+   "truth": [
+    {
+     "value": "1583"
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q160302#P571",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "1583"
+  },
+  {
+   "id": 24,
+   "kind": "fact",
+   "q": "When was the BBC founded?",
+   "draft": "1922",
+   "check": {
+    "wikidata": {
+     "title": "BBC",
+     "prop": "P571"
+    }
+   },
+   "status": "DISAGREES",
+   "truth": [
+    {
+     "value": "1927-01-01"
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q9531#P571",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "1927-01-01"
+  },
+  {
+   "id": 25,
+   "kind": "fact",
+   "q": "What is the official language of Brazil?",
+   "draft": "Portuguese",
+   "check": {
+    "wikidata": {
+     "title": "Brazil",
+     "prop": "P37"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Portuguese",
+     "aliases": [
+      "Portuguese language",
+      "pt",
+      "por"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q155#P37",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Portuguese"
+  },
+  {
+   "id": 26,
+   "kind": "fact",
+   "q": "How long is the River Thames, in kilometres?",
+   "draft": 346,
+   "check": {
+    "wikidata": {
+     "title": "River Thames",
+     "prop": "P2043"
+    }
+   },
+   "status": "DISAGREES",
+   "truth": [
+    {
+     "value": 334,
+     "unit": "Q828224"
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q19686#P2043",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "334 (Q828224)"
+  },
+  {
+   "id": 27,
+   "kind": "fact",
+   "q": "What is the population of Iceland?",
+   "draft": 390000,
+   "check": {
+    "wikidata": {
+     "title": "Iceland",
+     "prop": "P1082",
+     "tol": 0.08
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "value": 364260,
+     "unit": "1"
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q189#P1082",
+    "asOf": "2019-12-31",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "364260 [as of 2019-12-31]"
+  },
+  {
+   "id": 28,
+   "kind": "fact",
+   "q": "What is the population of Edinburgh?",
+   "draft": 520000,
+   "check": {
+    "wikidata": {
+     "title": "Edinburgh",
+     "prop": "P1082",
+     "tol": 0.15
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "value": 488050,
+     "unit": "1"
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q23436#P1082",
+    "asOf": "2016",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "488050 [as of 2016]"
+  },
+  {
+   "id": 29,
+   "kind": "fact",
+   "q": "Who discovered penicillin?",
+   "draft": "Alexander Fleming",
+   "check": {
+    "wikidata": {
+     "title": "Penicillin",
+     "prop": "P61"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Alexander Fleming",
+     "aliases": [
+      "Sir Alexander Fleming"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q12190#P61",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Alexander Fleming"
+  },
+  {
+   "id": 30,
+   "kind": "fact",
+   "q": "In what year did the Forth Bridge open?",
+   "draft": "1890",
+   "check": {
+    "wikidata": {
+     "title": "Forth Bridge",
+     "prop": "P1619"
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "value": "1890-03-04"
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q275#P1619",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "1890-03-04"
+  },
+  {
+   "id": 31,
+   "kind": "explain",
+   "q": "What was the Tay Bridge disaster?",
+   "draft": "collapse / 1879",
+   "check": {
+    "wikipedia": {
+     "title": "Tay Bridge disaster",
+     "mustMention": [
+      "collapse",
+      "1879"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "collapse",
+     "1879"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Tay_Bridge_disaster&oldid=1370642579",
+    "asOf": "2026-08-22",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 32,
+   "kind": "explain",
+   "q": "Why is Greyfriars Bobby famous?",
+   "draft": "grave",
+   "check": {
+    "wikipedia": {
+     "title": "Greyfriars Bobby",
+     "mustMention": [
+      "grave"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "grave"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Greyfriars_Bobby&oldid=1369934995",
+    "asOf": "2026-08-18",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 33,
+   "kind": "explain",
+   "q": "What happened at the Battle of Hastings?",
+   "draft": "1066 / William",
+   "check": {
+    "wikipedia": {
+     "title": "Battle of Hastings",
+     "mustMention": [
+      "1066",
+      "William"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "1066",
+     "William"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Battle_of_Hastings&oldid=1376904169",
+    "asOf": "2026-09-26",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 34,
+   "kind": "explain",
+   "q": "What is the Falkirk Wheel?",
+   "draft": "boat lift",
+   "check": {
+    "wikipedia": {
+     "title": "Falkirk Wheel",
+     "mustMention": [
+      "boat lift"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "boat lift"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Falkirk_Wheel&oldid=1375258193",
+    "asOf": "2026-09-16",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 35,
+   "kind": "explain",
+   "q": "When was the Great Fire of London?",
+   "draft": "1666",
+   "check": {
+    "wikipedia": {
+     "title": "Great Fire of London",
+     "mustMention": [
+      "1666"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "1666"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Great_Fire_of_London&oldid=1376270657",
+    "asOf": "2026-09-23",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 36,
+   "kind": "explain",
+   "q": "Who designed the Kelpies sculptures?",
+   "draft": "Andy Scott",
+   "check": {
+    "wikipedia": {
+     "title": "The Kelpies",
+     "mustMention": [
+      "Andy Scott"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "Andy Scott"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=The_Kelpies&oldid=1376148812",
+    "asOf": "2026-09-22",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 37,
+   "kind": "explain",
+   "q": "What is Hogmanay?",
+   "draft": "year",
+   "check": {
+    "wikipedia": {
+     "title": "Hogmanay",
+     "mustMention": [
+      "year"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "year"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Hogmanay&oldid=1375742801",
+    "asOf": "2026-09-19",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 38,
+   "kind": "explain",
+   "q": "What was the Enigma machine used for?",
+   "draft": "encrypt",
+   "check": {
+    "wikipedia": {
+     "title": "Enigma machine",
+     "mustMention": [
+      "encrypt"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "encrypt"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Enigma_machine&oldid=1369265293",
+    "asOf": "2026-08-13",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 39,
+   "kind": "explain",
+   "q": "What is Alexander Graham Bell best known for inventing?",
+   "draft": "telephone",
+   "check": {
+    "wikipedia": {
+     "title": "Alexander Graham Bell",
+     "mustMention": [
+      "telephone"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "telephone"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Alexander_Graham_Bell&oldid=1374359440",
+    "asOf": "2026-09-11",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 40,
+   "kind": "explain",
+   "q": "Who is the Scott Monument named after?",
+   "draft": "Walter Scott",
+   "check": {
+    "wikipedia": {
+     "title": "Scott Monument",
+     "mustMention": [
+      "Walter Scott"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "Walter Scott"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Scott_Monument&oldid=1376144070",
+    "asOf": "2026-09-22",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 41,
+   "kind": "explain",
+   "q": "What is the Edinburgh Festival Fringe?",
+   "draft": "arts festival",
+   "check": {
+    "wikipedia": {
+     "title": "Edinburgh Festival Fringe",
+     "mustMention": [
+      "arts festival"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "arts festival"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Edinburgh_Festival_Fringe&oldid=1375396576",
+    "asOf": "2026-09-17",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 42,
+   "kind": "explain",
+   "q": "What did Rosalind Franklin contribute to science?",
+   "draft": "DNA",
+   "check": {
+    "wikipedia": {
+     "title": "Rosalind Franklin",
+     "mustMention": [
+      "DNA"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "DNA"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Rosalind_Franklin&oldid=1375888124",
+    "asOf": "2026-09-20",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 43,
+   "kind": "recent",
+   "q": "Who is the current Prime Minister of the United Kingdom?",
+   "draft": "Keir Starmer",
+   "check": {
+    "wikidata": {
+     "title": "United Kingdom",
+     "prop": "P6",
+     "current": true
+    }
+   },
+   "status": "DISAGREES",
+   "truth": [
+    {
+     "label": "Andy Burnham",
+     "aliases": [
+      "Andrew Murray Burnham",
+      "Andrew Burnham"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q145#P6",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Andy Burnham"
+  },
+  {
+   "id": 44,
+   "kind": "recent",
+   "q": "Who is the current First Minister of Scotland?",
+   "draft": "John Swinney",
+   "check": {
+    "wikidata": {
+     "title": "Scotland",
+     "prop": "P6",
+     "current": true
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "John Swinney",
+     "aliases": [
+      "John Ramsay Swinney",
+      "John Ramsay Swinney"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q22#P6",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "John Swinney"
+  },
+  {
+   "id": 45,
+   "kind": "recent",
+   "q": "Who is the current Pope?",
+   "draft": "Pope Leo XIV",
+   "check": {
+    "wikidata": {
+     "title": "Vatican City",
+     "prop": "P35",
+     "current": true
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Leo XIV",
+     "aliases": [
+      "Cardinal Robert Francis Prevost",
+      "Cardinal Robert Prevost",
+      "Cardinal Prevost",
+      "Pope Leo XIV",
+      "Robert F. Prevost",
+      "Robert Prevost",
+      "Robert Francis Prevost Martínez",
+      "Robert Francis Prevost",
+      "Bob Prevost",
+      "Roberto Prevost"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q237#P35",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Leo XIV"
+  },
+  {
+   "id": 46,
+   "kind": "recent",
+   "q": "Who is the current President of the United States?",
+   "draft": "Donald Trump",
+   "check": {
+    "wikidata": {
+     "title": "United States",
+     "prop": "P35",
+     "current": true
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Donald Trump",
+     "aliases": [
+      "Donald John Trump",
+      "Don Trump",
+      "The Donald",
+      "The Don",
+      "Trump, Donald John",
+      "Trump, Donald",
+      "Trump, Don",
+      "President Donald John Trump",
+      "President Donald Trump",
+      "President Don Trump",
+      "President Trump",
+      "Trump",
+      "POTUS45",
+      "POTUS47",
+      "45-47",
+      "45/47",
+      "4547",
+      "Don",
+      "Donald",
+      "The Trump"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q30#P35",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Donald Trump"
+  },
+  {
+   "id": 47,
+   "kind": "recent",
+   "q": "Who is the current President of France?",
+   "draft": "Emmanuel Macron",
+   "check": {
+    "wikidata": {
+     "title": "France",
+     "prop": "P35",
+     "current": true
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Emmanuel Macron",
+     "aliases": [
+      "Emmanuel Jean-Michel Frédéric Macron",
+      "Jupiter",
+      "Macron"
+     ]
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q142#P35",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Emmanuel Macron"
+  },
+  {
+   "id": 48,
+   "kind": "recent",
+   "q": "Who is the current Chancellor of Germany?",
+   "draft": "Friedrich Merz",
+   "check": {
+    "wikidata": {
+     "title": "Germany",
+     "prop": "P6",
+     "current": true
+    }
+   },
+   "status": "verified",
+   "truth": [
+    {
+     "label": "Friedrich Merz",
+     "aliases": []
+    }
+   ],
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q183#P6",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Friedrich Merz"
+  },
+  {
+   "id": 49,
+   "kind": "recent",
+   "q": "Which cities hosted the 2026 Winter Olympics?",
+   "draft": "Milan / Cortina",
+   "check": {
+    "wikipedia": {
+     "title": "2026 Winter Olympics",
+     "mustMention": [
+      "Milan",
+      "Cortina"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "Milan",
+     "Cortina"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=2026_Winter_Olympics&oldid=1376836261",
+    "asOf": "2026-09-26",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 50,
+   "kind": "recent",
+   "q": "Who won the 2024 United States presidential election?",
+   "draft": "Donald Trump",
+   "check": {
+    "wikipedia": {
+     "title": "2024 United States presidential election",
+     "mustMention": [
+      "Trump"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "Trump"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=2024_United_States_presidential_election&oldid=1376392850",
+    "asOf": "2026-09-23",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 51,
+   "kind": "recent",
+   "q": "Which country won the 2026 FIFA World Cup?",
+   "draft": null,
+   "check": {
+    "wikipedia": {
+     "title": "2026 FIFA World Cup",
+     "find": "winner"
+    }
+   },
+   "status": "NEEDS-HUMAN",
+   "truth": null,
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=2026_FIFA_World_Cup&oldid=1376986106",
+    "asOf": "2026-09-27",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Spain won the final against defending champion Argentina 1–0 after extra time, winning its second title and first since 2010. … The final matchday at club level for players named in the final squads was May 24, 2026; clubs had to release their players by May 25, with exceptions granted to players participating in continental club competition finals up until May 30. … hosted 78 matches, including all quarterfinals, semifinals, and the final, which was played at MetLife Stadium in East Rutherford "
+  },
+  {
+   "id": 52,
+   "kind": "recent",
+   "q": "Which country won the Eurovision Song Contest 2025?",
+   "draft": "Austria",
+   "check": {
+    "wikipedia": {
+     "title": "Eurovision Song Contest 2025",
+     "mustMention": [
+      "Austria"
+     ]
+    }
+   },
+   "status": "verified",
+   "truth": {
+    "mustMention": [
+     "Austria"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Eurovision_Song_Contest_2025&oldid=1372735530",
+    "asOf": "2026-09-02",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "article mentions all terms"
+  },
+  {
+   "id": 53,
+   "kind": "ambiguous",
+   "q": "What is the population of Perth?",
+   "draft": "Perth, Western Australia vs Perth, Scotland",
+   "options": [
+    "Australia",
+    "Scotland"
+   ],
+   "status": "by-design",
+   "truth": null
+  },
+  {
+   "id": 54,
+   "kind": "ambiguous",
+   "q": "What is the capital of Georgia?",
+   "draft": "Tbilisi (country) vs Atlanta (US state)",
+   "options": [
+    "Tbilisi",
+    "Atlanta"
+   ],
+   "status": "by-design",
+   "truth": null
+  },
+  {
+   "id": 55,
+   "kind": "ambiguous",
+   "q": "When was Birmingham founded?",
+   "draft": "Birmingham, England vs Birmingham, Alabama",
+   "options": [
+    "England",
+    "Alabama"
+   ],
+   "status": "by-design",
+   "truth": null
+  },
+  {
+   "id": 56,
+   "kind": "multi",
+   "q": "How many years passed between the opening of the Forth Bridge and the opening of the Queensferry Crossing?",
+   "draft": 127,
+   "check": {
+    "parts": [
+     {
+      "title": "Forth Bridge",
+      "prop": "P1619"
+     },
+     {
+      "title": "Queensferry Crossing",
+      "prop": "P1619"
+     }
+    ]
+   },
+   "status": "verified",
+   "truth": {
+    "answer": 127,
+    "parts": [
+     "1890-03-04",
+     "2017-08-30"
+    ]
+   },
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q275#P1619 https://www.wikidata.org/wiki/Q8564816#P1619",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "127 — from 1890-03-04 | 2017-08-30"
+  },
+  {
+   "id": 57,
+   "kind": "multi",
+   "q": "Which is higher, Ben Nevis or Snowdon?",
+   "draft": "Ben Nevis",
+   "check": {
+    "parts": [
+     {
+      "title": "Ben Nevis",
+      "prop": "P2044"
+     },
+     {
+      "title": "Snowdon",
+      "prop": "P2044"
+     }
+    ]
+   },
+   "status": "verified",
+   "truth": {
+    "answer": "Ben Nevis",
+    "parts": [
+     "1344.527 (Q11573) [as of 2016]",
+     "1085 (Q11573)"
+    ]
+   },
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q104674#P2044 https://www.wikidata.org/wiki/Q217142#P2044",
+    "asOf": "2016",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Ben Nevis — from 1344.527 (Q11573) [as of 2016] | 1085 (Q11573)"
+  },
+  {
+   "id": 58,
+   "kind": "multi",
+   "q": "Was Ada Lovelace born before or after Charles Babbage?",
+   "draft": "after",
+   "check": {
+    "parts": [
+     {
+      "title": "Ada Lovelace",
+      "prop": "P569"
+     },
+     {
+      "title": "Charles Babbage",
+      "prop": "P569"
+     }
+    ]
+   },
+   "status": "verified",
+   "truth": {
+    "answer": "after",
+    "parts": [
+     "1815-12-10",
+     "1791-12-26"
+    ]
+   },
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q7259#P569 https://www.wikidata.org/wiki/Q46633#P569",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "after — from 1815-12-10 | 1791-12-26"
+  },
+  {
+   "id": 59,
+   "kind": "multi",
+   "q": "Were Charles Darwin and Abraham Lincoln born on the same day?",
+   "draft": "yes (12 February 1809)",
+   "check": {
+    "parts": [
+     {
+      "title": "Charles Darwin",
+      "prop": "P569"
+     },
+     {
+      "title": "Abraham Lincoln",
+      "prop": "P569"
+     }
+    ]
+   },
+   "status": "verified",
+   "truth": {
+    "answer": "yes (1809-02-12)",
+    "parts": [
+     "1809-02-12",
+     "1809-02-12"
+    ]
+   },
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q1035#P569 https://www.wikidata.org/wiki/Q91#P569",
+    "asOf": null,
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "yes (1809-02-12) — from 1809-02-12 | 1809-02-12"
+  },
+  {
+   "id": 60,
+   "kind": "multi",
+   "q": "Which has the larger population, Scotland or Norway?",
+   "draft": "Norway",
+   "check": {
+    "parts": [
+     {
+      "title": "Scotland",
+      "prop": "P1082"
+     },
+     {
+      "title": "Norway",
+      "prop": "P1082"
+     }
+    ]
+   },
+   "status": "verified",
+   "truth": {
+    "answer": "Norway",
+    "parts": [
+     "5404700 [as of 2016]",
+     "5627400 [as of 2026-01-01]"
+    ]
+   },
+   "source": {
+    "type": "wikidata",
+    "link": "https://www.wikidata.org/wiki/Q22#P1082 https://www.wikidata.org/wiki/Q20#P1082",
+    "asOf": "2016, 2026-01-01",
+    "checked": "2026-09-28"
+   },
+   "sourceSays": "Norway — from 5404700 [as of 2016] | 5627400 [as of 2026-01-01]"
+  },
+  {
+   "id": 61,
+   "kind": "trap",
+   "q": "What was the name of Greyfriars Bobby's mother?",
+   "draft": "decline",
+   "status": "by-design",
+   "truth": null
+  },
+  {
+   "id": 62,
+   "kind": "trap",
+   "q": "What was Ada Lovelace's favourite colour?",
+   "draft": "decline",
+   "status": "by-design",
+   "truth": null
+  },
+  {
+   "id": 63,
+   "kind": "trap",
+   "q": "What did Alan Turing eat for breakfast on 1 January 1940?",
+   "draft": "decline",
+   "status": "by-design",
+   "truth": null
+  },
+  {
+   "id": 64,
+   "kind": "trap",
+   "q": "How many people visited the Scott Monument in 2024?",
+   "draft": "decline",
+   "status": "by-design",
+   "truth": null
+  },
+  {
+   "id": 65,
+   "kind": "trap",
+   "q": "How many windows does the Forth Bridge have?",
+   "draft": "decline",
+   "status": "by-design",
+   "truth": null
+  },
+  {
+   "id": 66,
+   "kind": "trap",
+   "q": "Which team won the FA Cup in 1850?",
+   "draft": "decline",
+   "premiseOk": [
+    "1871",
+    "not exist",
+    "didn't exist",
+    "no fa cup",
+    "first fa cup"
+   ],
+   "status": "by-design",
+   "truth": null
+  },
+  {
+   "id": 67,
+   "kind": "trap",
+   "q": "What is the capital of the Republic of Scotland?",
+   "draft": "decline",
+   "premiseOk": [
+    "not a",
+    "no such",
+    "not an independent",
+    "is not a country",
+    "edinburgh"
+   ],
+   "status": "by-design",
+   "truth": null
+  },
+  {
+   "id": 68,
+   "kind": "trap",
+   "q": "What is the phone number of the Falkirk Wheel's designer?",
+   "draft": "decline",
+   "status": "by-design",
+   "truth": null
+  },
+  {
+   "id": "nq-1185",
+   "kind": "nq",
+   "q": "who plays drew's boyfriend on the night shift",
+   "truth": {
+    "answers": [
+     "Rick"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=The_Night_Shift_(TV_series)&oldid=1368597675",
+    "asOf": "2026-08-10",
+    "checked": "2026-09-28"
+   },
+   "status": "TIME-SENSITIVE",
+   "sourceSays": "The Night Shift (TV series) contains an answer"
+  },
+  {
+   "id": "nq-1186",
+   "kind": "nq",
+   "q": "when does kubo and the two strings release",
+   "truth": {
+    "answers": [
+     "August 19, 2016",
+     "August 19, 2016"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Kubo_and_the_Two_Strings&oldid=1374264092",
+    "asOf": "2026-09-10",
+    "checked": "2026-09-28"
+   },
+   "status": "verified",
+   "sourceSays": "Kubo and the Two Strings contains an answer"
+  },
+  {
+   "id": "nq-1187",
+   "kind": "nq",
+   "q": "who plays nikko in the wizard of oz",
+   "truth": {
+    "answers": [
+     "Patrick Walshe"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=The_Wizard_of_Oz&oldid=1372639734",
+    "asOf": "2026-09-01",
+    "checked": "2026-09-28"
+   },
+   "status": "NEEDS-HUMAN",
+   "sourceSays": "The Wizard of Oz — answer not found in it"
+  },
+  {
+   "id": "nq-1188",
+   "kind": "nq",
+   "q": "what is a e8 in the marine corps",
+   "truth": {
+    "answers": [
+     "Master sergeant",
+     "First sergeant"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=United_States_military_occupation_code&oldid=1354413947",
+    "asOf": "2026-05-16",
+    "checked": "2026-09-28"
+   },
+   "status": "verified",
+   "sourceSays": "United States military occupation code contains an answer"
+  },
+  {
+   "id": "nq-1189",
+   "kind": "nq",
+   "q": "who stole the mona lisa from the louvre in 1911",
+   "truth": {
+    "answers": [
+     "Vincenzo Peruggia"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=2025_Louvre_heist&oldid=1376053359",
+    "asOf": "2026-09-21",
+    "checked": "2026-09-28"
+   },
+   "status": "verified",
+   "sourceSays": "2025 Louvre heist contains an answer"
+  },
+  {
+   "id": "nq-1190",
+   "kind": "nq",
+   "q": "who sang the them song for as told by ginger",
+   "truth": {
+    "answers": [
+     "Melissa Disney",
+     "R&B artist Macy Gray",
+     "Macy Gray",
+     "Cree Summer"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Josh_Homme&oldid=1375902683",
+    "asOf": "2026-09-20",
+    "checked": "2026-09-28"
+   },
+   "status": "NEEDS-HUMAN",
+   "sourceSays": "Josh Homme — answer not found in it"
+  },
+  {
+   "id": "nq-1191",
+   "kind": "nq",
+   "q": "when does brooklyn nine nine season 5 episode 12",
+   "truth": {
+    "answers": [
+     "March 18, 2018"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Brooklyn_Nine-Nine_season_8&oldid=1365319316",
+    "asOf": "2026-07-21",
+    "checked": "2026-09-28"
+   },
+   "status": "NEEDS-HUMAN",
+   "sourceSays": "Brooklyn Nine-Nine season 8 — answer not found in it"
+  },
+  {
+   "id": "nq-1192",
+   "kind": "nq",
+   "q": "who is going to host the 2018 winter olympics",
+   "truth": {
+    "answers": [
+     "South Korea",
+     "Pyeongchang County, South Korea"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=2026_Winter_Olympics&oldid=1376836261",
+    "asOf": "2026-09-26",
+    "checked": "2026-09-28"
+   },
+   "status": "NEEDS-HUMAN",
+   "sourceSays": "2026 Winter Olympics — answer not found in it"
+  },
+  {
+   "id": "nq-1193",
+   "kind": "nq",
+   "q": "which came first the walking dead comic or show",
+   "truth": {
+    "answers": [
+     "comic book",
+     "comic"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=The_Walking_Dead_(comic_book)&oldid=1376193040",
+    "asOf": "2026-09-22",
+    "checked": "2026-09-28"
+   },
+   "status": "verified",
+   "sourceSays": "The Walking Dead (comic book) contains an answer"
+  },
+  {
+   "id": "nq-1194",
+   "kind": "nq",
+   "q": "who played john clark sr on nypd blue",
+   "truth": {
+    "answers": [
+     "Joe Spano"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=John_Clark_Jr.&oldid=1370223460",
+    "asOf": "2026-08-19",
+    "checked": "2026-09-28"
+   },
+   "status": "NEEDS-HUMAN",
+   "sourceSays": "John Clark Jr. — answer not found in it"
+  },
+  {
+   "id": "nq-1195",
+   "kind": "nq",
+   "q": "who played peter benton's sister on er",
+   "truth": {
+    "answers": [
+     "Jackie Robbins"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Peter_Benton&oldid=1368984964",
+    "asOf": "2026-08-12",
+    "checked": "2026-09-28"
+   },
+   "status": "verified",
+   "sourceSays": "Peter Benton contains an answer"
+  },
+  {
+   "id": "nq-1196",
+   "kind": "nq",
+   "q": "where is the protien made in the cell",
+   "truth": {
+    "answers": [
+     "in the cell nucleus",
+     "cell nucleus"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Protein&oldid=1371936731",
+    "asOf": "2026-08-29",
+    "checked": "2026-09-28"
+   },
+   "status": "TIME-SENSITIVE",
+   "sourceSays": "Protein contains an answer"
+  },
+  {
+   "id": "nq-1197",
+   "kind": "nq",
+   "q": "who is given credit for inventing the aqua lung",
+   "truth": {
+    "answers": [
+     "Jacques Cousteau",
+     "engineer Émile Gagnan",
+     "Émile Gagnan"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Jacques_Cousteau&oldid=1376964778",
+    "asOf": "2026-09-27",
+    "checked": "2026-09-28"
+   },
+   "status": "verified",
+   "sourceSays": "Jacques Cousteau contains an answer"
+  },
+  {
+   "id": "nq-1198",
+   "kind": "nq",
+   "q": "who won the 1st battle of bull run",
+   "truth": {
+    "answers": [
+     "Confederate victory",
+     "Confederate forces",
+     "Confederate"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=First_Battle_of_Bull_Run&oldid=1375785048",
+    "asOf": "2026-09-20",
+    "checked": "2026-09-28"
+   },
+   "status": "verified",
+   "sourceSays": "First Battle of Bull Run contains an answer"
+  },
+  {
+   "id": "nq-1199",
+   "kind": "nq",
+   "q": "who plays the voice of john smith in pocahontas",
+   "truth": {
+    "answers": [
+     "Mel Gibson"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Pocahontas_(character)&oldid=1376752689",
+    "asOf": "2026-09-26",
+    "checked": "2026-09-28"
+   },
+   "status": "NEEDS-HUMAN",
+   "sourceSays": "Pocahontas (character) — answer not found in it"
+  },
+  {
+   "id": "nq-1200",
+   "kind": "nq",
+   "q": "computer based models of real life situation are called",
+   "truth": {
+    "answers": [
+     "Computer simulation",
+     "Computer simulations"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Glossary_of_computer_science&oldid=1376890980",
+    "asOf": "2026-09-26",
+    "checked": "2026-09-28"
+   },
+   "status": "verified",
+   "sourceSays": "Glossary of computer science contains an answer"
+  },
+  {
+   "id": "nq-1201",
+   "kind": "nq",
+   "q": "how many inches is the iphone 5s screen",
+   "truth": {
+    "answers": [
+     "4 in",
+     "4-inch screen size"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=IPhone_5s&oldid=1371533283",
+    "asOf": "2026-08-27",
+    "checked": "2026-09-28"
+   },
+   "status": "TIME-SENSITIVE",
+   "sourceSays": "IPhone 5s contains an answer"
+  },
+  {
+   "id": "nq-1202",
+   "kind": "nq",
+   "q": "5 cities with the highest population in europe",
+   "truth": {
+    "answers": [
+     "London",
+     "Saint Petersburg",
+     "Berlin",
+     "Moscow",
+     "Istanbul"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=List_of_countries_and_dependencies_by_population&oldid=1377020183",
+    "asOf": "2026-09-27",
+    "checked": "2026-09-28"
+   },
+   "status": "NEEDS-HUMAN",
+   "sourceSays": "List of countries and dependencies by population — answer not found in it"
+  },
+  {
+   "id": "nq-1203",
+   "kind": "nq",
+   "q": "who is the valley of the dolls based on",
+   "truth": {
+    "answers": [
+     "Dean Martin",
+     "Judy Garland",
+     "Ethel Merman",
+     "Carole Landis"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Valley_of_the_Dolls_(film)&oldid=1373975101",
+    "asOf": "2026-09-09",
+    "checked": "2026-09-28"
+   },
+   "status": "TIME-SENSITIVE",
+   "sourceSays": "Valley of the Dolls (film) contains an answer"
+  },
+  {
+   "id": "nq-1204",
+   "kind": "nq",
+   "q": "when did the movie the post begin filming",
+   "truth": {
+    "answers": [
+     "May 2017",
+     "May 30, 2017"
+    ]
+   },
+   "source": {
+    "type": "wikipedia",
+    "link": "https://en.wikipedia.org/w/index.php?title=Begin_Again_(film)&oldid=1366574600",
+    "asOf": "2026-07-28",
+    "checked": "2026-09-28"
+   },
+   "status": "NEEDS-HUMAN",
+   "sourceSays": "Begin Again (film) — answer not found in it"
+  }
+ ]
+}
