@@ -344,7 +344,7 @@
       <div class="sidebar-footer">
         <div>Prompt API: <span class="status-pill" id="status-pill">checking…</span></div>
         <div style="margin-top:0.35rem;"><a href="https://github.com/nlade-core/chrome-chat" target="_blank" rel="noopener">Source</a> · <a href="#" id="about-link">About</a> · <a href="?tour" id="tour-link">Take the tour</a> · Chrome desktop only</div>
-        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 10:30 UTC</div>
+        <div style="margin-top:0.35rem;opacity:0.6;" id="build-tag">build 2026-09-28 11:05 UTC</div>
       </div>
     </div>
     <div id="about-overlay" style="display:none;">
@@ -3576,6 +3576,14 @@
       // somehow switches to a different one in the meantime.
       const threadId = activeThreadId;
       const conv = conversations.get(threadId);
+      // An edited question that qualifies for the compute path goes through it, like a fresh one.
+      if (!conv.messages[i].attachmentType && !conv.messages[i].urlContext && shouldCompute(text, { messages: conv.messages.slice(0, i) })) {
+        conv.messages = conv.messages.slice(0, i);
+        if (conv.session) { try { conv.session.destroy(); } catch {} conv.session = null; }
+        stickToBottom = true;
+        await sendCompute(text);
+        return;
+      }
       const carried = await carryAttachmentFrom(conv.messages[i]);
       // Only now -- with a real, confirmed replacement text in hand -- do we
       // actually truncate and destroy the session. A live session's internal
@@ -3619,6 +3627,15 @@
     async function regenerateFrom(assistantIndex) {
       const threadId = activeThreadId;
       const conv = conversations.get(threadId);
+      // A computed answer regenerates through the compute path (the chat session
+      // was cleared after it, so the generic path below would silently do nothing).
+      const prior = conv && conv.messages[assistantIndex - 1];
+      if (conv && !conv.streaming && conv.messages[assistantIndex] && conv.messages[assistantIndex].compute && prior && prior.role === 'user') {
+        conv.messages = conv.messages.slice(0, assistantIndex - 1);
+        stickToBottom = true; renderChat();
+        await sendCompute(prior.content);
+        return;
+      }
       if (!conv || conv.streaming || !conv.session) return;
       const lastUserIndex = assistantIndex - 1;
       if (lastUserIndex < 0 || conv.messages[lastUserIndex].role !== 'user') return;
