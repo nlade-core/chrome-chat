@@ -122,8 +122,19 @@ export const CASES = [
   { id: 84, words: true, code: true, q: 'Split £100 between Anna and Ben in the ratio 3:2. How much does each get?', all: [['60'], ['40']] },
   { id: 85, words: true, code: true, q: 'A school trip uses 3 coaches, each carrying 52 pupils, plus 11 teachers. Tickets cost £7.50 per pupil and teachers go free. The trip leaves at 8:30. What is the total ticket cost, in pounds?', num: 1170 },
   { id: 86, words: true, code: true, q: 'My train leaves at half past nine in the morning and the journey takes forty minutes. What time do I arrive?', text: ['10:10'] },
+  // MESSY (2026-09-28, committed before the question-resolution step exists):
+  // typos, numbers as words, casual phrasing -- what people actually type. 87
+  // keeps a correctly spelt quoted word amid typos; 92 and 94 are near-misses.
+  { id: 87, messy: true, code: true, q: 'hw many tims dose the leter r apear in "strawberry"', num: 3 },
+  { id: 88, messy: true, code: true, q: 'whats 17 percent of two hundred and forty', num: 40.8 },
+  { id: 89, messy: true, code: true, q: 'if i leave at quarter to 3 in the afternoon and drive 2 and a half hours when do i get there', text: ['17:15', '5:15'] },
+  { id: 90, messy: true, code: true, q: 'wot day of teh week is 25 dec 2026', ...day('friday') },
+  { id: 91, messy: true, code: true, q: 'how many days til 1 jan 2027 from 28 sept 2026', num: 95 },
+  { id: 92, messy: true, code: false, q: 'capital of frnace?', text: ['paris'] },
+  { id: 93, messy: true, code: true, q: 'three hundred and twelve divided by eight', num: 39 },
+  { id: 94, messy: true, code: false, q: 'who rote hamlet', text: ['shakespeare'] },
 ];
-for (const c of CASES) c.set = c.words ? 'words' : c.probe ? 'probe' : c.held === 2 ? 'held2' : c.held ? 'held' : 'tune';
+for (const c of CASES) c.set = c.messy ? 'messy' : c.words ? 'words' : c.probe ? 'probe' : c.held === 2 ? 'held2' : c.held ? 'held' : 'tune';
 
 export const PROMPT_TOOLS = 'You are a helpful, concise assistant. You cannot see the individual letters of words, and you make arithmetic and date mistakes. '
   + 'So if a question needs counting, arithmetic or a date or time calculation, never work it out in your head: think briefly about what to compute, '
